@@ -88,6 +88,8 @@ class MainActivity : AppCompatActivity() {
     }
     private val openProject = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) loadProject(uri) }
     private val openImage = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) loadImage(uri) }
+    private val openMask = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) loadMask(uri) }
+    private var maskArgs = floatArrayOf(1f, 0f, 10f)
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
     private fun write(name: String, mime: String, w: (OutputStream) -> Unit) { pendingWrite = w; createDoc.launch(name to mime) }
@@ -170,7 +172,7 @@ class MainActivity : AppCompatActivity() {
                 layoutParams = GridLayout.LayoutParams().apply { width = dp(46); height = dp(46); setMargins(dp(2), dp(2), dp(2), dp(2)) }
                 background = GradientDrawable().apply { setColor(0x22FFFFFF); cornerRadius = dp(8).toFloat() }
                 addView(IconView(context, t.icon), FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER))
-                setOnClickListener { cv.tool = t; toast(t.label) }
+                setOnClickListener { cv.tool = t; toast(if (t == Tool.MESH) "Mesh: tap a shape, tap a point, then tap a colour" else t.label) }
                 setOnLongClickListener { toolOptions(t); true }
             }
             icons[t] = cell; grid.addView(cell)
@@ -192,6 +194,10 @@ class MainActivity : AppCompatActivity() {
             Tool.NODE -> menu("Node operations", listOf(
                 "Add node" to { cv.nodeAdd() }, "Delete node" to { cv.nodeDelete() }, "Break at node" to { cv.nodeBreak() }, "Join / close path" to { cv.nodeJoin() },
                 "Convert to curve" to { cv.nodeToCurve() }, "Convert to line" to { cv.nodeToLine() }, "Make smooth" to { cv.nodeSmooth() }, "Make cusp" to { cv.nodeCusp() }))
+            Tool.TRANS -> transMenu()
+            Tool.MESH -> menu("Mesh fill", listOf(
+                "Mesh size…" to { numDialog("Mesh vertices", listOf("Rows (2-8)", "Columns (2-8)"), listOf(cv.meshRows.toFloat(), cv.meshCols.toFloat())) { cv.meshRows = it[0].toInt().coerceIn(2, 8); cv.meshCols = it[1].toInt().coerceIn(2, 8); cv.meshApply() } },
+                "Remove mesh" to { cv.meshClear() }))
             Tool.PEN, Tool.BEZIER, Tool.POLYLINE, Tool.BSPLINE -> cv.finishPen()
             else -> {}
         }
@@ -403,7 +409,7 @@ class MainActivity : AppCompatActivity() {
         "Contour (approx.)…" to { numDialog("Contour", listOf("Offset per step (mm)", "Steps", "Outward = 1, inward = 0"), listOf(2f, 3f, 1f)) { cv.contour(it[0], it[1].toInt().coerceIn(1, 40), it[2] > 0.5f) } },
         "Blend (select 2 shapes)…" to { numDialog("Blend", listOf("Steps"), listOf(6f)) { cv.blend(it[0].toInt().coerceIn(1, 60)) } },
         "Extrude (oblique)…" to { numDialog("Extrude", listOf("Depth (mm)", "Angle (°)", "Steps"), listOf(12f, 45f, 14f)) { cv.extrude(it[0], it[1], it[2].toInt().coerceIn(2, 60)) } },
-        "Transparency: use the α slider in Properties" to {}))
+        "Transparency ▸ (uniform = α slider)" to { transMenu() }))
 
     private fun pageMenu() = menu("Page & Grid", listOf(
         "A4 (210×297 mm)" to { setPage(210f, 297f) }, "A3 (297×420 mm)" to { setPage(297f, 420f) }, "Letter (215.9×279.4 mm)" to { setPage(215.9f, 279.4f) },
@@ -434,6 +440,27 @@ class MainActivity : AppCompatActivity() {
                 cv.commitText(o, isNew)
             }.setNegativeButton("Cancel", null).show()
     }
+
+    // ---------- Transparency (fountain / bitmap pattern) ----------
+    private fun transMenu() = menu("Transparency", listOf(
+        "Remove transparency mask" to { cv.transClear() },
+        "Fountain (gradient)…" to { numDialog("Fountain transparency", listOf("Start opacity %", "End opacity %", "Angle °"), listOf(100f, 0f, 0f)) { cv.transFountain(it[0] / 100f, it[1] / 100f, it[2]) } },
+        "Bitmap pattern…" to { patternMenu() }))
+
+    private fun patternMenu() = menu("Pattern", Pat.NAMES.mapIndexed { i, n -> n to { patternArgs(i) } } + ("Image from file…" to { patternArgs(-1) }))
+
+    private fun patternArgs(idx: Int) = numDialog("Pattern transparency", listOf("White-area opacity %", "Black-area opacity %", "Tile size (mm)"), listOf(100f, 0f, 10f)) {
+        if (idx >= 0) cv.transPattern(idx, it[0] / 100f, it[1] / 100f, it[2])
+        else { maskArgs = floatArrayOf(it[0] / 100f, it[1] / 100f, it[2]); openMask.launch(arrayOf("image/*")) }
+    }
+
+    private fun loadMask(uri: Uri) = try {
+        val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }; BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+        var s = 1; while (max(o.outWidth, o.outHeight) / s > 512) s *= 2
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = s })
+        if (bmp == null) toast("Unsupported image") else { cv.transPatternImage(bmp, maskArgs[0], maskArgs[1], maskArgs[2]); toast("Light areas stay visible, dark areas fade") }
+    } catch (e: Exception) { toast("Could not load mask: ${e.message}") }
 
     // ---------- Storage (SAF) ----------
     private fun loadProject(uri: Uri) = try {

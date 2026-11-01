@@ -34,6 +34,13 @@ class VObj(var kind: Kind = Kind.PATH) {
     var strokeW = 0.3f
     var cap = 0; var join = 0; var dash = 0
     var arrow = false
+    var mesh: IntArray? = null      // mesh fill vertex colours (row-major), spread evenly over the bounds
+    var meshR = 0; var meshC = 0
+    // transparency mask: 0 = none (uniform alpha only), 1 = fountain, 2 = bitmap pattern
+    var tMode = 0; var tA1 = 1f; var tA2 = 0f; var tAngle = 0f
+    var tPat = 0; var tTile = 10f           // built-in pattern index (-1 = custom image) and tile width in mm
+    var tBmp: Bitmap? = null
+    var tBaked: Bitmap? = null; var tKey = ""   // cache, never saved
     var alpha = 1f
     var shadow = false
     var layer = 0
@@ -115,6 +122,8 @@ class VObj(var kind: Kind = Kind.PATH) {
         o.text = text; o.size = size; o.bold = bold; o.italic = italic; o.align = align; o.spacing = spacing
         o.leading = leading; o.tx = tx; o.ty = ty; o.frameW = frameW; o.onPath = onPath
         o.bmp = bmp; o.rect = RectF(rect)
+        o.mesh = mesh?.copyOf(); o.meshR = meshR; o.meshC = meshC
+        o.tMode = tMode; o.tA1 = tA1; o.tA2 = tA2; o.tAngle = tAngle; o.tPat = tPat; o.tTile = tTile; o.tBmp = tBmp; o.tBaked = tBaked; o.tKey = tKey
     }
 
     fun toJson(): JSONObject = JSONObject().apply {
@@ -125,6 +134,11 @@ class VObj(var kind: Kind = Kind.PATH) {
         put("n", JSONArray().also { arr ->
             nodes.forEach { n -> arr.put(JSONArray(listOf(n.x, n.y, n.ix, n.iy, n.ox, n.oy, if (n.smooth) 1f else 0f).map { it.toDouble() })) }
         })
+        if (tMode != 0) {
+            put("tm", tMode); put("ta1", tA1.toDouble()); put("ta2", tA2.toDouble()); put("tang", tAngle.toDouble()); put("tpat", tPat); put("ttile", tTile.toDouble())
+            tBmp?.let { put("tbmp", Base64.encodeToString(Png.bytes(it), Base64.NO_WRAP)) }
+        }
+        mesh?.let { m -> put("mr", meshR); put("mc", meshC); put("mesh", JSONArray(m.toList())) }
         if (kind == Kind.TEXT) {
             put("t", text); put("sz", size.toDouble()); put("b", bold); put("i", italic); put("al", align)
             put("sp", spacing.toDouble()); put("ld", leading.toDouble()); put("tx", tx.toDouble()); put("ty", ty.toDouble())
@@ -152,6 +166,13 @@ class VObj(var kind: Kind = Kind.PATH) {
                 n.ix = a.getDouble(2).toFloat(); n.iy = a.getDouble(3).toFloat(); n.ox = a.getDouble(4).toFloat(); n.oy = a.getDouble(5).toFloat()
                 n.smooth = a.getDouble(6) > 0.5; o.nodes.add(n)
             }
+            o.tMode = j.optInt("tm")
+            if (o.tMode != 0) {
+                o.tA1 = j.optDouble("ta1", 1.0).toFloat(); o.tA2 = j.optDouble("ta2", 0.0).toFloat(); o.tAngle = j.optDouble("tang", 0.0).toFloat()
+                o.tPat = j.optInt("tpat"); o.tTile = j.optDouble("ttile", 10.0).toFloat()
+                if (j.has("tbmp")) { val bytes = Base64.decode(j.getString("tbmp"), Base64.NO_WRAP); o.tBmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
+            }
+            if (j.has("mesh")) { val a = j.getJSONArray("mesh"); o.mesh = IntArray(a.length()) { a.getInt(it) }; o.meshR = j.optInt("mr"); o.meshC = j.optInt("mc") }
             if (o.kind == Kind.TEXT) {
                 o.text = j.optString("t"); o.size = j.optDouble("sz", 8.0).toFloat(); o.bold = j.optBoolean("b"); o.italic = j.optBoolean("i")
                 o.align = j.optInt("al"); o.spacing = j.optDouble("sp", 0.0).toFloat(); o.leading = j.optDouble("ld", 1.2).toFloat()

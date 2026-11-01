@@ -105,4 +105,20 @@ object Geo {
         a.ox = q0x; a.oy = q0y; b.ix = q2x; b.iy = q2y
         return n
     }
+
+    fun segPoint(a: Node, b: Node, t: Float): PointF {
+        if (a.outLine() && b.inLine()) return PointF(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+        val u = 1 - t
+        return PointF(u * u * u * a.x + 3 * u * u * t * a.ox + 3 * u * t * t * b.ix + t * t * t * b.x,
+            u * u * u * a.y + 3 * u * u * t * a.oy + 3 * u * t * t * b.iy + t * t * t * b.y)
+    }
+
+    /** Intersection of segments p1-p2 and p3-p4: returns (t on p1p2, u on p3p4) or null. */
+    fun segInter(p1: PointF, p2: PointF, p3: PointF, p4: PointF): FloatArray? {
+        val d1x = p2.x - p1.x; val d1y = p2.y - p1.y; val d2x = p4.x - p3.x; val d2y = p4.y - p3.y
+        val den = d1x * d2y - d1y * d2x; if (abs(den) < 1e-9f) return null
+        val t = ((p3.x - p1.x) * d2y - (p3.y - p1.y) * d2x) / den
+        val u = ((p3.x - p1.x) * d1y - (p3.y - p1.y) * d1x) / den
+        return if (t in 0f..1f && u in 0f..1f) floatArrayOf(t, u) else null
+    }
 }

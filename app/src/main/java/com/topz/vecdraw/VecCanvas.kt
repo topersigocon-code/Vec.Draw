@@ -29,25 +29,31 @@ enum class Tool(val label: String, val icon: String) {
     BASIC("Basic shapes", "M12 4l7 7-7 9-7-9z"),
     TEXT("Text", "M5 6V4h14v2 M12 4v16 M9 20h6"),
     EYE("Eyedropper", "M15 4l5 5-3 3-5-5z M12 7l-8 8v4h4l8-8"),
-    FILL("Interactive fill", "M6 11L12 5L19 12L13 18z M19 15c1 2 2 3 2 4a2 2 0 0 1-4 0c0-1 1-2 2-4")
+    FILL("Interactive fill", "M6 11L12 5L19 12L13 18z M19 15c1 2 2 3 2 4a2 2 0 0 1-4 0c0-1 1-2 2-4"),
+    KNIFE("Knife", "M3 21L15 9 M13 3L21 11L17 15L9 7z"),
+    VSD("Delete segment", "M3 18C6 6 18 6 21 18 M10 9l4 4 M14 9l-4 4"),
+    ENVELOPE("Envelope", "M4 5C9 8 15 8 20 5V19C15 16 9 16 4 19z"),
+    MESH("Mesh fill", "M4 4h16v16H4z M4 12h16 M12 4v16"),
+    TRANS("Transparency", "M12 3C12 3 5 11 5 15a7 7 0 0 0 14 0C19 11 12 3 12 3z M8 15a4 4 0 0 0 4 4")
 }
 
 class VecCanvas(ctx: Context) : View(ctx) {
     companion object {
         const val M_NONE = 0; const val M_PAN = 1; const val M_MOVE = 2; const val M_SCALE = 3; const val M_ROT = 4
         const val M_MARQ = 5; const val M_NODE = 6; const val M_HIN = 7; const val M_HOUT = 8; const val M_SHAPE = 9
-        const val M_SHAPE3 = 10; const val M_PEN = 11; const val M_FH = 12
+        const val M_SHAPE3 = 10; const val M_PEN = 11; const val M_FH = 12; const val M_ENV = 13
     }
 
     var doc = Doc()
     var scale = 3.78f; var panX = 30f; var panY = 30f
     var tool = Tool.PICK
-        set(v) { finishPen(); p3 = 0; field = v; if (v != Tool.NODE) selNode = -1; invalidate(); status(); onChange() }
+        set(v) { finishPen(); p3 = 0; field = v; meshV = -1; if (v == Tool.ENVELOPE) envInit() else envQ = null; if (v != Tool.NODE) selNode = -1; invalidate(); status(); onChange() }
     val sel = mutableListOf<VObj>()
     var selNode = -1
     var activeLayer = 0
     var snapGrid = true; var snapGuides = true; var snapObjs = false; var showGrid = true
     var lockRatio = true
+    var meshRows = 3; var meshCols = 3; private var meshV = -1
     var polySides = 6; var starPts = 5; var basicIdx = 0
     val style = VObj().also { it.strokeW = 0.3f }
     var onChange: () -> Unit = {}
@@ -65,6 +71,8 @@ class VecCanvas(ctx: Context) : View(ctx) {
     private var rotCx = 0f; private var rotCy = 0f
     private var pen: VObj? = null
     private val fh = ArrayList<PointF>()
+    private var envQ: FloatArray? = null; private var envB0 = RectF(); private var envOrig: List<VObj> = emptyList()
+    private var envSel: List<VObj> = emptyList(); private var envCorner = -1
     private var p3 = 0; private var b1x = 0f; private var b1y = 0f; private var b2x = 0f; private var b2y = 0f
 
     // ---------- paints ----------
@@ -75,6 +83,8 @@ class VecCanvas(ctx: Context) : View(ctx) {
     private val pv = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF00E5FF.toInt(); style = Paint.Style.STROKE }
     private val selP = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFE5A93C.toInt(); style = Paint.Style.STROKE; strokeWidth = 2f; pathEffect = DashPathEffect(floatArrayOf(10f, 8f), 0f) }
     private val hFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val meshP = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val ringW = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 3f }
     private val hGold = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFE5A93C.toInt() }
     private val hStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFE5A93C.toInt(); style = Paint.Style.STROKE; strokeWidth = 3f }
 
@@ -99,8 +109,8 @@ class VecCanvas(ctx: Context) : View(ctx) {
     // ---------- history ----------
     fun checkpoint() { uStack.addLast(doc.objs.map { it.copy() }); if (uStack.size > 60) uStack.removeFirst(); rStack.clear() }
     private fun ensureCk() { if (!gCk) { checkpoint(); gCk = true } }
-    fun undo() { if (uStack.isEmpty()) return; rStack.addLast(doc.objs.map { it.copy() }); doc.objs = uStack.removeLast().toMutableList(); sel.clear(); selNode = -1; changed() }
-    fun redo() { if (rStack.isEmpty()) return; uStack.addLast(doc.objs.map { it.copy() }); doc.objs = rStack.removeLast().toMutableList(); sel.clear(); selNode = -1; changed() }
+    fun undo() { if (uStack.isEmpty()) return; rStack.addLast(doc.objs.map { it.copy() }); doc.objs = uStack.removeLast().toMutableList(); sel.clear(); selNode = -1; envQ = null; changed() }
+    fun redo() { if (rStack.isEmpty()) return; uStack.addLast(doc.objs.map { it.copy() }); doc.objs = rStack.removeLast().toMutableList(); sel.clear(); selNode = -1; envQ = null; changed() }
     fun newDoc(d: Doc) { doc = d; sel.clear(); selNode = -1; uStack.clear(); rStack.clear(); activeLayer = 0; fit(); changed() }
 
     // ---------- object creation ----------
@@ -170,7 +180,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
         p3 == 1 -> build3(cx, cy)?.path()
         mode == M_FH && fh.size > 1 -> Path().apply { moveTo(fh[0].x, fh[0].y); for (i in 1 until fh.size) lineTo(fh[i].x, fh[i].y) }
         mode == M_SHAPE && (tool == Tool.CROP || tool == Tool.TEXT) -> Path().apply { addRect(min(sx0, cx), min(sy0, cy), max(sx0, cx), max(sy0, cy), Path.Direction.CW) }
-        mode == M_SHAPE && (tool == Tool.FILL || tool == Tool.RECT3 || tool == Tool.ELLIPSE3) -> Path().apply { moveTo(sx0, sy0); lineTo(cx, cy) }
+        mode == M_SHAPE && (tool == Tool.FILL || tool == Tool.TRANS || tool == Tool.KNIFE || tool == Tool.RECT3 || tool == Tool.ELLIPSE3) -> Path().apply { moveTo(sx0, sy0); lineTo(cx, cy) }
         mode == M_SHAPE -> buildShape()?.path()
         else -> null
     }
@@ -195,6 +205,26 @@ class VecCanvas(ctx: Context) : View(ctx) {
                     if (!n.outLine()) { c.drawLine(x, y, scrX(n.ox), scrY(n.oy), selP); c.drawCircle(scrX(n.ox), scrY(n.oy), 8f, hGold) }
                     c.drawRect(x - 9, y - 9, x + 9, y + 9, hGold)
                 } else { c.drawRect(x - 7, y - 7, x + 7, y + 7, hFill); c.drawRect(x - 7, y - 7, x + 7, y + 7, hStroke) }
+            }
+        }
+        if (tool == Tool.MESH) meshObj()?.takeIf { it.mesh != null }?.let { o ->
+            val m = o.mesh!!
+            for (i in 0 until o.meshR) for (j in 0 until o.meshC) {
+                val p = meshPt(o, i * o.meshC + j)
+                if (j < o.meshC - 1) { val q = meshPt(o, i * o.meshC + j + 1); c.drawLine(scrX(p.x), scrY(p.y), scrX(q.x), scrY(q.y), selP) }
+                if (i < o.meshR - 1) { val q = meshPt(o, (i + 1) * o.meshC + j); c.drawLine(scrX(p.x), scrY(p.y), scrX(q.x), scrY(q.y), selP) }
+            }
+            for (k in m.indices) {
+                val p = meshPt(o, k); meshP.color = m[k]
+                c.drawCircle(scrX(p.x), scrY(p.y), if (k == meshV) 16f else 12f, meshP)
+                c.drawCircle(scrX(p.x), scrY(p.y), if (k == meshV) 16f else 12f, if (k == meshV) hStroke else ringW)
+            }
+        }
+        envQ?.let { q ->
+            if (tool == Tool.ENVELOPE && sel.isNotEmpty()) {
+                val ep = Path().apply { moveTo(scrX(q[0]), scrY(q[1])); for (i in 1..3) lineTo(scrX(q[i * 2]), scrY(q[i * 2 + 1])); close() }
+                c.drawPath(ep, selP)
+                for (i in 0 until 4) { c.drawCircle(scrX(q[i * 2]), scrY(q[i * 2 + 1]), 11f, hFill); c.drawCircle(scrX(q[i * 2]), scrY(q[i * 2 + 1]), 11f, hStroke) }
             }
         }
         pen?.let { p -> for (n in p.nodes) { c.drawCircle(scrX(n.x), scrY(n.y), 7f, hGold) } }
@@ -253,8 +283,11 @@ class VecCanvas(ctx: Context) : View(ctx) {
                 val h = topHit(ox0, oy0)
                 if (h != null && h.kind == Kind.TEXT) { sel.clear(); sel.add(h); changed(); onText(h, false) } else mode = M_SHAPE
             }
+            Tool.ENVELOPE -> envDown(x, y)
+            Tool.MESH -> meshDown(x, y)
+            Tool.VSD -> vsdDown()
             Tool.EYE -> eyeDown()
-            Tool.FILL -> { if (sel.isEmpty()) topHit(ox0, oy0)?.let { sel.add(it); changed() }; mode = M_SHAPE }
+            Tool.FILL, Tool.TRANS -> { if (sel.isEmpty()) topHit(ox0, oy0)?.let { sel.add(it); changed() }; mode = M_SHAPE }
             else -> mode = M_SHAPE
         }
         invalidate()
@@ -278,6 +311,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
             }
             M_NODE, M_HIN, M_HOUT -> nodeDrag(rx, ry, p)
             M_PEN -> penDrag(p)
+            M_ENV -> if (moved) { ensureCk(); envDrag(p) }
             M_FH -> fh.add(PointF(rx, ry))
         }
         pdx = rx; pdy = ry; cx = p.x; cy = p.y; lx = x; ly = y
@@ -510,7 +544,16 @@ class VecCanvas(ctx: Context) : View(ctx) {
                 if (abs(cx - sx0) > 5f) { o.tx = min(sx0, cx); o.ty = min(sy0, cy) + o.size; o.frameW = abs(cx - sx0) } else { o.tx = sx0; o.ty = sy0 }
                 onText(o, true)
             }
+            Tool.KNIFE -> knife(sx0, sy0, cx, cy)
             Tool.CROP -> cropTo(RectF(min(sx0, cx), min(sy0, cy), max(sx0, cx), max(sy0, cy)))
+            Tool.TRANS -> if (sel.isNotEmpty()) {
+                checkpoint()
+                if (dist > 2f) {
+                    val ang = Math.toDegrees(atan2((cy - sy0).toDouble(), (cx - sx0).toDouble())).toFloat()
+                    sel.forEach { if (it.tMode != 1) { it.tMode = 1; it.tA1 = 1f; it.tA2 = 0f }; it.tAngle = ang }
+                } else sel.forEach { it.tMode = 0 }
+                changed()
+            }
             Tool.FILL -> if (sel.isNotEmpty()) {
                 checkpoint()
                 if (dist > 2f) { val ang = Math.toDegrees(atan2((cy - sy0).toDouble(), (cx - sx0).toDouble())).toFloat(); sel.forEach { if (it.fill2 == null) it.fill2 = Color.WHITE; it.gradAngle = ang } }
@@ -558,7 +601,13 @@ class VecCanvas(ctx: Context) : View(ctx) {
 
     // ---------- public editing API ----------
     fun editSel(ck: Boolean = true, block: (VObj) -> Unit) { if (sel.isNotEmpty()) { if (ck) checkpoint(); sel.forEach(block) }; changed() }
-    fun setFill(c: Int?) { style.fill = c; editSel { it.fill = c } }
+    fun setFill(c: Int?) {
+        if (tool == Tool.MESH && c != null) {
+            val o = meshObj()
+            if (o != null && o.mesh != null && meshV in 0 until o.meshR * o.meshC) { checkpoint(); o.mesh!![meshV] = c or (0xFF shl 24); changed(); return }
+        }
+        style.fill = c; editSel { it.fill = c }
+    }
     fun setFill2(c: Int?, angle: Float? = null) { style.fill2 = c; editSel { it.fill2 = c; if (angle != null) it.gradAngle = angle } }
     fun setStroke(c: Int?) { style.stroke = c; editSel { it.stroke = c } }
     fun setStrokeW(w: Float) { style.strokeW = w; editSel { it.strokeW = w } }
@@ -598,6 +647,134 @@ class VecCanvas(ctx: Context) : View(ctx) {
         val s = min(doc.w / bmp.width, doc.h / bmp.height) * 0.9f; val w = bmp.width * s; val h = bmp.height * s
         o.rect = RectF((doc.w - w) / 2, (doc.h - h) / 2, (doc.w + w) / 2, (doc.h + h) / 2)
         doc.objs.add(0, o); sel.clear(); changed()
+    }
+
+    // ---------- Transparency masks ----------
+    fun transFountain(a1: Float, a2: Float, angle: Float) = editSel { it.tMode = 1; it.tA1 = a1.coerceIn(0f, 1f); it.tA2 = a2.coerceIn(0f, 1f); it.tAngle = angle }
+    fun transPattern(idx: Int, a1: Float, a2: Float, tile: Float) = editSel { it.tMode = 2; it.tPat = idx; it.tA1 = a1.coerceIn(0f, 1f); it.tA2 = a2.coerceIn(0f, 1f); it.tTile = max(tile, 0.5f) }
+    fun transPatternImage(bmp: Bitmap, a1: Float, a2: Float, tile: Float) = editSel { it.tMode = 2; it.tPat = -1; it.tBmp = bmp; it.tA1 = a1.coerceIn(0f, 1f); it.tA2 = a2.coerceIn(0f, 1f); it.tTile = max(tile, 0.5f) }
+    fun transClear() = editSel { it.tMode = 0 }
+
+    // ---------- Mesh fill ----------
+    private fun meshObj(): VObj? = sel.firstOrNull { it.kind == Kind.PATH && it.closed }
+
+    private fun meshPt(o: VObj, idx: Int): PointF {
+        val b = o.bounds(); val i = idx / o.meshC; val j = idx % o.meshC
+        return PointF(b.left + b.width() * j / (o.meshC - 1), b.top + b.height() * i / (o.meshR - 1))
+    }
+
+    private fun makeMesh(o: VObj, rows: Int, cols: Int) {
+        val r = rows.coerceIn(2, 8); val c = cols.coerceIn(2, 8)
+        val old = o.mesh; val oR = o.meshR; val oC = o.meshC; val base = o.fill ?: Color.WHITE
+        o.mesh = IntArray(r * c) { k -> if (old != null && oR >= 2 && oC >= 2) Render.meshAt(old, oR, oC, (k % c) / (c - 1f), (k / c) / (r - 1f)) else base }
+        o.meshR = r; o.meshC = c; if (o.fill == null) o.fill = base
+    }
+
+    private fun meshDown(x: Float, y: Float) {
+        meshObj()?.takeIf { it.mesh != null }?.let { o ->
+            for (k in 0 until o.meshR * o.meshC) {
+                val p = meshPt(o, k)
+                if (hypot(scrX(p.x) - x, scrY(p.y) - y) < 30f) { meshV = k; invalidate(); onChange(); return }
+            }
+        }
+        val h = topHit(ox0, oy0)
+        if (h != null && h.kind == Kind.PATH && h.closed) {
+            if (h !in sel) { sel.clear(); sel.add(h) }
+            if (h.mesh == null) { checkpoint(); makeMesh(h, meshRows, meshCols) }
+            meshV = -1; changed()
+        } else { meshV = -1; invalidate() }
+    }
+
+    /** Apply meshRows x meshCols to the selected closed paths (re-samples an existing mesh). */
+    fun meshApply() { val t = sel.filter { it.kind == Kind.PATH && it.closed }; if (t.isEmpty()) return; checkpoint(); t.forEach { makeMesh(it, meshRows, meshCols) }; meshV = -1; changed() }
+    fun meshClear() { val t = sel.filter { it.mesh != null }; if (t.isEmpty()) return; checkpoint(); t.forEach { it.mesh = null; it.meshR = 0; it.meshC = 0 }; meshV = -1; changed() }
+
+    // ---------- Virtual segment delete ----------
+    private fun vsdDown() {
+        val o = topHit(ox0, oy0)?.takeIf { it.kind == Kind.PATH && it.nodes.size >= 2 } ?: return
+        val n = o.nodes.size; val segs = if (o.closed) n else n - 1
+        var best = -1; var bd = Float.MAX_VALUE
+        for (i in 0 until segs) {
+            val a = o.nodes[i]; val b = o.nodes[(i + 1) % n]
+            for (k in 0..16) { val p = Geo.segPoint(a, b, k / 16f); val d = hypot(p.x - ox0, p.y - oy0); if (d < bd) { bd = d; best = i } }
+        }
+        if (best < 0 || bd > 14f / scale) return
+        checkpoint()
+        if (o.closed) {
+            o.nodes = (0 until n).map { o.nodes[(best + 1 + it) % n].copy() }.toMutableList(); o.closed = false; o.fill = null
+        } else {
+            val first = o.nodes.subList(0, best + 1).map { it.copy() }; val second = o.nodes.subList(best + 1, n).map { it.copy() }
+            var at = doc.objs.indexOf(o); doc.objs.remove(o); val made = mutableListOf<VObj>()
+            for (part in listOf(first, second)) if (part.size >= 2) { val c = o.copy(); c.nodes = part.toMutableList(); c.fill = null; doc.objs.add(at++, c); made.add(c) }
+            sel.clear(); sel.addAll(made); selNode = -1
+        }
+        changed()
+    }
+
+    // ---------- Knife (cuts closed shapes along a line; pieces become straight-edged polygons) ----------
+    private fun knife(x0: Float, y0: Float, x1: Float, y1: Float) {
+        if (hypot(x1 - x0, y1 - y0) < 1f) return
+        val a = PointF(x0, y0); val b = PointF(x1, y1)
+        val targets = (if (sel.isEmpty()) doc.objs.filter { pickable(it) } else sel.toList()).filter { it.kind == Kind.PATH && it.closed }
+        var did = false; val newSel = mutableListOf<VObj>()
+        for (o in targets) {
+            var pts = Geo.flatten(o.path(), 0.5f); if (pts.size < 4) continue
+            if (hypot(pts.last().x - pts.first().x, pts.last().y - pts.first().y) < 1e-3f) pts = pts.dropLast(1)
+            val m = pts.size; val hits = ArrayList<Pair<Int, PointF>>()
+            for (j in 0 until m) {
+                val c = pts[j]; val d = pts[(j + 1) % m]; val r = Geo.segInter(a, b, c, d) ?: continue
+                hits.add(j to PointF(c.x + (d.x - c.x) * r[1], c.y + (d.y - c.y) * r[1]))
+            }
+            if (hits.size < 2) continue
+            if (!did) { checkpoint(); did = true }
+            val j1 = hits[0].first; val p1 = hits[0].second; val j2 = hits[1].first; val p2 = hits[1].second
+            val piece1 = mutableListOf(p1); for (k in (j1 + 1)..j2) piece1.add(pts[k]); piece1.add(p2)
+            val piece2 = mutableListOf(p2); for (k in (j2 + 1) until m) piece2.add(pts[k]); for (k in 0..j1) piece2.add(pts[k]); piece2.add(p1)
+            val at = doc.objs.indexOf(o); doc.objs.remove(o)
+            for ((ci, pc) in listOf(piece1, piece2).withIndex()) {
+                val c = o.copy(); c.closed = true; c.nodes = Geo.rdp(pc, 0.03f).map { Node(it.x, it.y) }.toMutableList()
+                doc.objs.add(at + ci, c); newSel.add(c)
+            }
+        }
+        if (did) { sel.clear(); sel.addAll(newSel); selNode = -1; changed() }
+    }
+
+    // ---------- Envelope (4-corner bilinear warp of the selected paths' nodes and handles) ----------
+    private fun envInit(): Boolean {
+        val targets = sel.filter { it.kind == Kind.PATH }; if (targets.isEmpty()) return false
+        if (envQ == null || envSel.size != targets.size || envSel.indices.any { envSel[it] !== targets[it] }) {
+            envSel = targets; envOrig = targets.map { it.copy() }
+            val b = RectF(targets[0].bounds()); targets.forEach { b.union(it.bounds()) }
+            envB0 = b; envQ = floatArrayOf(b.left, b.top, b.right, b.top, b.right, b.bottom, b.left, b.bottom)
+        }
+        return true
+    }
+
+    private fun envDown(x: Float, y: Float) {
+        if (!envInit()) { topHit(ox0, oy0)?.takeIf { it.kind == Kind.PATH }?.let { sel.clear(); sel.add(it); envInit(); changed() }; return }
+        val q = envQ!!
+        for (i in 0 until 4) if (hypot(scrX(q[i * 2]) - x, scrY(q[i * 2 + 1]) - y) < 36f) { envCorner = i; mode = M_ENV; return }
+        topHit(ox0, oy0)?.takeIf { it.kind == Kind.PATH }?.let { if (it !in sel) { sel.clear(); sel.add(it); envInit(); changed() } }
+    }
+
+    private fun envMap(x: Float, y: Float): PointF {
+        val q = envQ!!; val u = (x - envB0.left) / max(envB0.width(), 1e-3f); val v = (y - envB0.top) / max(envB0.height(), 1e-3f)
+        val a = (1 - u) * (1 - v); val b = u * (1 - v); val c = u * v; val d = (1 - u) * v
+        return PointF(a * q[0] + b * q[2] + c * q[4] + d * q[6], a * q[1] + b * q[3] + c * q[5] + d * q[7])
+    }
+
+    private fun envDrag(p: PointF) {
+        val q = envQ ?: return; if (envCorner < 0) return
+        q[envCorner * 2] = p.x; q[envCorner * 2 + 1] = p.y
+        for ((k, o) in envSel.withIndex()) {
+            o.nodes = envOrig[k].nodes.map { n ->
+                val c = n.copy()
+                envMap(n.x, n.y).let { c.x = it.x; c.y = it.y }
+                envMap(n.ix, n.iy).let { c.ix = it.x; c.iy = it.y }
+                envMap(n.ox, n.oy).let { c.ox = it.x; c.oy = it.y }
+                c
+            }.toMutableList()
+        }
     }
 
     // ---------- effects ----------
