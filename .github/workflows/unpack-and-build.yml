@@ -1,0 +1,51 @@
+name: Unpack and Build
+# I-upload ang zip sa updates/ folder -> ia-unpack sa repo, i-commit, tapos magba-build ng APK.
+on:
+  push:
+    paths: ['updates/*.zip']
+  workflow_dispatch:   # pwede ring i-run manually (magba-build lang ng current repo)
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unpack-and-build
+  cancel-in-progress: false
+
+jobs:
+  unpack-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unpack newest zip from updates/
+        run: |
+          ZIP=$(ls -t updates/*.zip 2>/dev/null | head -n1 || true)
+          if [ -z "$ZIP" ]; then echo "Walang zip sa updates/ - build na lang ng current repo."; exit 0; fi
+          echo "Unpacking $ZIP"
+          rm -rf /tmp/unz && mkdir /tmp/unz && unzip -q "$ZIP" -d /tmp/unz
+          rm -rf /tmp/unz/__MACOSX
+          SRC=/tmp/unz
+          # kung may iisang top-level folder lang (hal. VecDraw/), i-strip ito
+          if [ "$(ls -A /tmp/unz | wc -l)" = "1" ] && [ -d "/tmp/unz/$(ls /tmp/unz)" ]; then SRC="/tmp/unz/$(ls /tmp/unz)"; fi
+          test -f "$SRC/settings.gradle.kts" || { echo "::error::settings.gradle.kts not found in zip"; exit 1; }
+          # --delete: tinatanggal ang mga file na wala na sa zip (para walang naiwang lumang .kt)
+          rsync -a --delete --exclude '.git/' --exclude '.github/' --exclude 'updates/' "$SRC"/ ./
+          rm -f updates/*.zip
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then echo "Walang pagbabago."; else
+            git commit -m "Update from $(basename "$ZIP")"
+            git push
+          fi
+
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: gradle/actions/setup-gradle@v3
+        with: { gradle-version: "8.4" }
+      - run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VecDraw-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
