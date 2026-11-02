@@ -60,7 +60,8 @@ object Render {
 
     const val MESH_SUB = 8   // flat sub-cells per mesh cell, per axis
 
-    class MeshCell(val x0: Float, val y0: Float, val x1: Float, val y1: Float, val color: Int)
+    /** One flat-coloured quad: p = x0,y0 ... x3,y3 (clockwise from top-left). */
+    class MeshCell(val p: FloatArray, val color: Int)
 
     fun mix(a: Int, b: Int, t: Float) = Color.rgb(
         (Color.red(a) + (Color.red(b) - Color.red(a)) * t).toInt(),
@@ -74,14 +75,57 @@ object Render {
         return mix(mix(m[i * c + j], m[i * c + j + 1], tx), mix(m[(i + 1) * c + j], m[(i + 1) * c + j + 1], tx), ty)
     }
 
-    /** Flat-coloured sub-cells approximating the smooth mesh: stays 100% vector in screen, SVG and PDF. */
+    /** Vertex position in document space (regular grid unless the user moved points). */
+    fun meshVertex(o: VObj, idx: Int, b: RectF): PointF {
+        val pos = o.meshPos; val c = o.meshC; val r = o.meshR
+        val u = if (pos != null && pos.size >= (idx + 1) * 2) pos[idx * 2] else (idx % c) / (c - 1f)
+        val v = if (pos != null && pos.size >= (idx + 1) * 2) pos[idx * 2 + 1] else (idx / c) / (r - 1f)
+        return PointF(b.left + b.width() * u, b.top + b.height() * v)
+    }
+
+    /** Control point at vertex a of the cubic edge towards neighbour b: 1/3 along the edge plus the stored handle offset. */
+    fun meshCtrl(o: VObj, a: Int, b: Int, dir: Int, bb: RectF): PointF {
+        val pa = meshVertex(o, a, bb); val pb = meshVertex(o, b, bb); val h = o.meshH
+        var dx = 0f; var dy = 0f
+        if (h != null && h.size >= (a + 1) * 8) { dx = h[a * 8 + dir * 2] * bb.width(); dy = h[a * 8 + dir * 2 + 1] * bb.height() }
+        return PointF(pa.x + (pb.x - pa.x) / 3 + dx, pa.y + (pb.y - pa.y) / 3 + dy)
+    }
+
+    private fun edgePts(o: VObj, a: Int, b: Int, da: Int, db: Int, bb: RectF, n: Int): Array<PointF> {
+        val p0 = meshVertex(o, a, bb); val p3 = meshVertex(o, b, bb); val p1 = meshCtrl(o, a, b, da, bb); val p2 = meshCtrl(o, b, a, db, bb)
+        return Array(n + 1) { k ->
+            val t = k / n.toFloat(); val u = 1 - t
+            PointF(u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
+                u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y)
+        }
+    }
+
+    /**
+     * Flat-coloured sub-quads approximating the smooth mesh. Each cell is a Coons patch bounded by the four cubic
+     * edges (so curved edges are shared exactly by neighbours); stays 100% vector in screen, SVG and PDF.
+     */
     fun meshCells(o: VObj): List<MeshCell> {
         val m = o.mesh ?: return emptyList(); val r = o.meshR; val c = o.meshC
         if (r < 2 || c < 2 || m.size < r * c) return emptyList()
-        val b = o.bounds(); val nx = (c - 1) * MESH_SUB; val ny = (r - 1) * MESH_SUB; val out = ArrayList<MeshCell>(nx * ny)
-        for (iy in 0 until ny) for (ix in 0 until nx) {
-            val u0 = ix / nx.toFloat(); val u1 = (ix + 1) / nx.toFloat(); val v0 = iy / ny.toFloat(); val v1 = (iy + 1) / ny.toFloat()
-            out.add(MeshCell(b.left + b.width() * u0, b.top + b.height() * v0, b.left + b.width() * u1, b.top + b.height() * v1, meshAt(m, r, c, (u0 + u1) / 2, (v0 + v1) / 2)))
+        val b = o.bounds(); val n = MESH_SUB; val out = ArrayList<MeshCell>((r - 1) * (c - 1) * n * n)
+        for (i in 0 until r - 1) for (j in 0 until c - 1) {
+            val i00 = i * c + j; val i01 = i00 + 1; val i10 = i00 + c; val i11 = i10 + 1
+            val p00 = meshVertex(o, i00, b); val p01 = meshVertex(o, i01, b); val p10 = meshVertex(o, i10, b); val p11 = meshVertex(o, i11, b)
+            val top = edgePts(o, i00, i01, 1, 0, b, n); val bot = edgePts(o, i10, i11, 1, 0, b, n)
+            val left = edgePts(o, i00, i10, 3, 2, b, n); val right = edgePts(o, i01, i11, 3, 2, b, n)
+            val gx = Array(n + 1) { FloatArray(n + 1) }; val gy = Array(n + 1) { FloatArray(n + 1) }
+            for (iv in 0..n) for (iu in 0..n) {
+                val u = iu / n.toFloat(); val v = iv / n.toFloat()
+                gx[iv][iu] = (1 - v) * top[iu].x + v * bot[iu].x + (1 - u) * left[iv].x + u * right[iv].x -
+                    ((1 - u) * (1 - v) * p00.x + u * (1 - v) * p01.x + (1 - u) * v * p10.x + u * v * p11.x)
+                gy[iv][iu] = (1 - v) * top[iu].y + v * bot[iu].y + (1 - u) * left[iv].y + u * right[iv].y -
+                    ((1 - u) * (1 - v) * p00.y + u * (1 - v) * p01.y + (1 - u) * v * p10.y + u * v * p11.y)
+            }
+            for (sy in 0 until n) for (sx in 0 until n) {
+                val uc = (sx + 0.5f) / n; val vc = (sy + 0.5f) / n
+                val col = mix(mix(m[i00], m[i01], uc), mix(m[i10], m[i11], uc), vc)
+                out.add(MeshCell(floatArrayOf(gx[sy][sx], gy[sy][sx], gx[sy][sx + 1], gy[sy][sx + 1], gx[sy + 1][sx + 1], gy[sy + 1][sx + 1], gx[sy + 1][sx], gy[sy + 1][sx]), col))
+            }
         }
         return out
     }
@@ -92,7 +136,11 @@ object Render {
         val saved = if (a < 255) c.saveLayerAlpha(null, a) else c.save()
         c.clipPath(p)
         val pt = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL_AND_STROKE; strokeWidth = 0.15f }   // stroke hides seams
-        for (cell in cells) { pt.color = cell.color; c.drawRect(cell.x0, cell.y0, cell.x1, cell.y1, pt) }
+        val q = Path()
+        for (cell in cells) {
+            val v = cell.p; q.rewind(); q.moveTo(v[0], v[1]); q.lineTo(v[2], v[3]); q.lineTo(v[4], v[5]); q.lineTo(v[6], v[7]); q.close()
+            pt.color = cell.color; c.drawPath(q, pt)
+        }
         c.restoreToCount(saved)
     }
 
@@ -198,7 +246,8 @@ object Export {
         val sb = StringBuilder("<defs><clipPath id=\"mc$id\"><path d=\"$d\"/></clipPath></defs>\n<g clip-path=\"url(#mc$id)\"${if (op < 0.999f) " opacity=\"${f(op)}\"" else ""}>\n")
         for (c in Render.meshCells(o)) {
             val h = hex(c.color)
-            sb.append("<rect x=\"${f(c.x0)}\" y=\"${f(c.y0)}\" width=\"${f(c.x1 - c.x0)}\" height=\"${f(c.y1 - c.y0)}\" fill=\"$h\" stroke=\"$h\" stroke-width=\"0.15\"/>\n")
+            val pts = (0 until 4).joinToString(" ") { "${f(c.p[it * 2])},${f(c.p[it * 2 + 1])}" }
+            sb.append("<polygon points=\"$pts\" fill=\"$h\" stroke=\"$h\" stroke-width=\"0.15\"/>\n")
         }
         return sb.append("</g>\n").toString()
     }

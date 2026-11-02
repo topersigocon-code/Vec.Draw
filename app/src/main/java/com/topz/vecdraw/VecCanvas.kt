@@ -9,39 +9,40 @@ import android.view.View
 import kotlin.math.*
 
 enum class Tool(val label: String, val icon: String) {
-    PAN("Pan", "M7 11V6a1.5 1.5 0 0 1 3 0v5 M10 11V4a1.5 1.5 0 0 1 3 0v7 M13 11V5a1.5 1.5 0 0 1 3 0v8 M16 9a1.5 1.5 0 0 1 3 0v6c0 4-3 6-6 6s-5-2-7-5l-2-3"),
-    PICK("Pick", "M6 3L6 19L10 15L13 21L15.5 20L12.5 14L18 14Z"),
-    NODE("Shape / Node", "M4 18C8 4 16 4 20 18 M3 17h3v3H3z M18 17h3v3h-3z M10.5 4.5h3v3h-3z"),
-    CROP("Crop", "M6 2v16h16 M2 6h16v16"),
-    FREEHAND("Freehand", "M3 15C6 6 9 6 11 12S16 18 21 8"),
-    PEN("Pen", "M14 4l6 6-10 10H4v-6z M12 6l6 6"),
-    BEZIER("Bezier", "M4 18C4 6 20 18 20 6 M3 17h2v2H3z M19 5h2v2h-2z"),
-    POLYLINE("Polyline", "M3 18L9 8L14 15L21 5"),
-    BSPLINE("B-Spline", "M3 19C8 3 10 21 14 9S19 6 21 5"),
-    SMART("Smart draw", "M3 12C3 6 9 3 12 3 M12 3L9 1 M12 3L9 6 M21 12a9 9 0 0 1-9 9"),
-    RECT("Rectangle", "M4 6h16v12H4z"),
-    RECT3("3-pt Rect", "M4 16L9 5L21 9L16 20z"),
-    ELLIPSE("Ellipse", "M3 12a9 6 0 1 0 18 0a9 6 0 1 0-18 0"),
-    ELLIPSE3("3-pt Ellipse", "M5 17a9 5-35 1 0 14-10a9 5-35 1 0-14 10z"),
-    POLYGON("Polygon", "M12 3l8 6-3 10H7L4 9z"),
-    STAR("Star", "M12 3l2.6 6 6.4.6-4.8 4.3 1.4 6.3L12 17l-5.6 3.2 1.4-6.3L3 9.6 9.4 9z"),
+    // icon format: parts split by '|' ; plain = outline stroke, '~' = soft accent fill, '@' = solid node marker
+    PICK("Pick", "~M5.5 3.5l13 7.5-5.8 1.6L9.8 19z|M5.5 3.5l13 7.5-5.8 1.6L9.8 19z"),
+    PAN("Pan", "M8 13V6.5a1.5 1.5 0 0 1 3 0V12 M11 11.5V4.5a1.5 1.5 0 0 1 3 0V12 M14 12V6a1.5 1.5 0 0 1 3 0v8 M17 10.5a1.5 1.5 0 0 1 3 0v4c0 4-2.5 6.5-6.5 6.5-3 0-4.5-1.5-6-3.5L4.5 14a1.5 1.5 0 0 1 2.4-1.8L8 13.5"),
+    NODE("Shape / Node", "M4 18C5 9 12 5 20 6|@M2.5 16.5h3v3h-3z|@M18.5 4.5h3v3h-3z|@M7.9 6.75h3v3h-3z"),
+    ENVELOPE("Envelope", "~M4 6C9 9 15 9 20 6V18C15 15 9 15 4 18z|M4 6C9 9 15 9 20 6V18C15 15 9 15 4 18z|@M2.5 4.5h3v3h-3z|@M18.5 4.5h3v3h-3z|@M18.5 16.5h3v3h-3z|@M2.5 16.5h3v3h-3z"),
+    CROP("Crop", "M7 3v14h14|M3 7h14v14"),
+    KNIFE("Knife", "~M3 21l2-7 8-8 5 5-8 8z|M3 21l2-7 8-8 5 5-8 8z|M13 6l5 5"),
+    VSD("Delete segment", "M3 17C4 11 7 8.5 10.5 8|M13.5 8.5C17 9 20 12 21 17|M10.5 11.5l3 3 M13.5 11.5l-3 3|@M2 15.5h3v3H2z|@M19.5 15.5h3v3h-3z"),
+    FREEHAND("Freehand", "M3 16C6 6 9 6 11 12S16 18 21 8"),
+    PEN("Pen", "~M12 3l6 8-6 10-6-10z|M12 3l6 8-6 10-6-10z|M12 11.5V16|@M11 9.5a1 1 0 1 0 2 0a1 1 0 1 0-2 0z"),
+    BEZIER("Bezier", "M4 18C4 8 20 16 20 6|M4 18V11 M20 6v7|@M2.5 16.5h3v3h-3z|@M18.5 4.5h3v3h-3z"),
+    POLYLINE("Polyline", "M3.5 18L9 9l5 6 6.5-9.5|@M2 16.5h3v3H2z|@M7.5 7.5h3v3h-3z|@M12.5 13.5h3v3h-3z|@M19 4h3v3h-3z"),
+    BSPLINE("B-Spline", "M3 17C7 4 11 4 12 12S17 20 21 7|@M2 15.5h3v3H2z|@M19.5 5.5h3v3h-3z"),
+    SMART("Smart draw", "M3 18c3-7 6-7 8-3s5 2 8-5|M18 2.5v4 M16 4.5h4"),
+    RECT("Rectangle", "~M4 6h16v12H4z|M4 6h16v12H4z"),
+    RECT3("3-pt Rect", "~M4 15L9 5l11 4-5 10z|M4 15L9 5l11 4-5 10z|@M2.5 13.5h3v3h-3z|@M7.5 3.5h3v3h-3z|@M13.5 17.5h3v3h-3z"),
+    ELLIPSE("Ellipse", "~M3 12a9 6 0 1 0 18 0a9 6 0 1 0-18 0|M3 12a9 6 0 1 0 18 0a9 6 0 1 0-18 0"),
+    ELLIPSE3("3-pt Ellipse", "~M5 17a9 5-35 1 0 14-10a9 5-35 1 0-14 10z|M5 17a9 5-35 1 0 14-10a9 5-35 1 0-14 10z|@M3.5 15.5h3v3h-3z|@M17.5 5.5h3v3h-3z"),
+    POLYGON("Polygon", "~M12 3l8 4.5v9L12 21l-8-4.5v-9z|M12 3l8 4.5v9L12 21l-8-4.5v-9z"),
+    STAR("Star", "~M12 3l2.7 5.8 6.3.8-4.6 4.4 1.2 6.3L12 17.2 6.4 20.3l1.2-6.3L3 9.6l6.3-.8z|M12 3l2.7 5.8 6.3.8-4.6 4.4 1.2 6.3L12 17.2 6.4 20.3l1.2-6.3L3 9.6l6.3-.8z"),
     SPIRAL("Spiral", "M12 12a1 1 0 0 1 2 0a2.5 2.5 0 0 1-5 0a4 4 0 0 1 8 0a5.5 5.5 0 0 1-11 0a7 7 0 0 1 14 0"),
-    BASIC("Basic shapes", "M12 4l7 7-7 9-7-9z"),
-    TEXT("Text", "M5 6V4h14v2 M12 4v16 M9 20h6"),
-    EYE("Eyedropper", "M15 4l5 5-3 3-5-5z M12 7l-8 8v4h4l8-8"),
-    FILL("Interactive fill", "M6 11L12 5L19 12L13 18z M19 15c1 2 2 3 2 4a2 2 0 0 1-4 0c0-1 1-2 2-4"),
-    KNIFE("Knife", "M3 21L15 9 M13 3L21 11L17 15L9 7z"),
-    VSD("Delete segment", "M3 18C6 6 18 6 21 18 M10 9l4 4 M14 9l-4 4"),
-    ENVELOPE("Envelope", "M4 5C9 8 15 8 20 5V19C15 16 9 16 4 19z"),
-    MESH("Mesh fill", "M4 4h16v16H4z M4 12h16 M12 4v16"),
-    TRANS("Transparency", "M12 3C12 3 5 11 5 15a7 7 0 0 0 14 0C19 11 12 3 12 3z M8 15a4 4 0 0 0 4 4")
+    BASIC("Basic shapes", "~M12 20C5 15 3 11.5 3 8.5A4.5 4.5 0 0 1 12 6.5 4.5 4.5 0 0 1 21 8.5C21 11.5 19 15 12 20z|M12 20C5 15 3 11.5 3 8.5A4.5 4.5 0 0 1 12 6.5 4.5 4.5 0 0 1 21 8.5C21 11.5 19 15 12 20z"),
+    TEXT("Text", "M5 7V5h14v2 M12 5v14 M9 19h6"),
+    EYE("Eyedropper", "M15 4l5 5-2.5 2.5-5-5z|M12 7.5L4.5 15v4.5H9l7.5-7.5|~M4.5 15L9 19.5H4.5z"),
+    FILL("Interactive fill", "~M7 11l5-6 7 7-6 6z|M7 11l5-6 7 7-6 6z|M19 15c1.2 1.8 2 3 2 4a2 2 0 0 1-4 0c0-1 .8-2.2 2-4"),
+    MESH("Mesh fill", "~M4 4h16v16H4z|M4 4h16v16H4z|M4 12c4-2 8 2 16 0 M12 4c-2 4 2 8 0 16|@M10.5 10.5h3v3h-3z"),
+    TRANS("Transparency", "~M12 3C12 3 5 11 5 15a7 7 0 0 0 14 0C19 11 12 3 12 3z|M12 3C12 3 5 11 5 15a7 7 0 0 0 14 0C19 11 12 3 12 3z|M12 19a4 4 0 0 1-4-4")
 }
 
 class VecCanvas(ctx: Context) : View(ctx) {
     companion object {
         const val M_NONE = 0; const val M_PAN = 1; const val M_MOVE = 2; const val M_SCALE = 3; const val M_ROT = 4
         const val M_MARQ = 5; const val M_NODE = 6; const val M_HIN = 7; const val M_HOUT = 8; const val M_SHAPE = 9
-        const val M_SHAPE3 = 10; const val M_PEN = 11; const val M_FH = 12; const val M_ENV = 13
+        const val M_SHAPE3 = 10; const val M_PEN = 11; const val M_FH = 12; const val M_ENV = 13; const val M_MESHV = 14; const val M_MESHH = 15
     }
 
     var doc = Doc()
@@ -54,6 +55,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     var snapGrid = true; var snapGuides = true; var snapObjs = false; var showGrid = true
     var lockRatio = true
     var meshRows = 3; var meshCols = 3; private var meshV = -1
+    private var meshHdir = -1
     var polySides = 6; var starPts = 5; var basicIdx = 0
     val style = VObj().also { it.strokeW = 0.3f }
     var onChange: () -> Unit = {}
@@ -219,6 +221,14 @@ class VecCanvas(ctx: Context) : View(ctx) {
                 c.drawCircle(scrX(p.x), scrY(p.y), if (k == meshV) 16f else 12f, meshP)
                 c.drawCircle(scrX(p.x), scrY(p.y), if (k == meshV) 16f else 12f, if (k == meshV) hStroke else ringW)
             }
+            if (meshV in m.indices) {
+                val vp = meshPt(o, meshV)
+                for (d in 0 until 4) {
+                    val hp = meshHandle(o, meshV, d) ?: continue
+                    c.drawLine(scrX(vp.x), scrY(vp.y), scrX(hp.x), scrY(hp.y), selP)
+                    c.drawCircle(scrX(hp.x), scrY(hp.y), 10f, hGold); c.drawCircle(scrX(hp.x), scrY(hp.y), 10f, ringW)
+                }
+            }
         }
         envQ?.let { q ->
             if (tool == Tool.ENVELOPE && sel.isNotEmpty()) {
@@ -312,6 +322,8 @@ class VecCanvas(ctx: Context) : View(ctx) {
             M_NODE, M_HIN, M_HOUT -> nodeDrag(rx, ry, p)
             M_PEN -> penDrag(p)
             M_ENV -> if (moved) { ensureCk(); envDrag(p) }
+            M_MESHV -> if (moved) { ensureCk(); meshDrag(rx, ry) }
+            M_MESHH -> if (moved) { ensureCk(); meshHandleDrag(rx, ry) }
             M_FH -> fh.add(PointF(rx, ry))
         }
         pdx = rx; pdy = ry; cx = p.x; cy = p.y; lx = x; ly = y
@@ -658,23 +670,27 @@ class VecCanvas(ctx: Context) : View(ctx) {
     // ---------- Mesh fill ----------
     private fun meshObj(): VObj? = sel.firstOrNull { it.kind == Kind.PATH && it.closed }
 
-    private fun meshPt(o: VObj, idx: Int): PointF {
-        val b = o.bounds(); val i = idx / o.meshC; val j = idx % o.meshC
-        return PointF(b.left + b.width() * j / (o.meshC - 1), b.top + b.height() * i / (o.meshR - 1))
-    }
+    private fun meshPt(o: VObj, idx: Int): PointF = Render.meshVertex(o, idx, o.bounds())
 
     private fun makeMesh(o: VObj, rows: Int, cols: Int) {
         val r = rows.coerceIn(2, 8); val c = cols.coerceIn(2, 8)
+        if (o.mesh != null && o.meshR == r && o.meshC == c) return
         val old = o.mesh; val oR = o.meshR; val oC = o.meshC; val base = o.fill ?: Color.WHITE
         o.mesh = IntArray(r * c) { k -> if (old != null && oR >= 2 && oC >= 2) Render.meshAt(old, oR, oC, (k % c) / (c - 1f), (k / c) / (r - 1f)) else base }
-        o.meshR = r; o.meshC = c; if (o.fill == null) o.fill = base
+        o.meshR = r; o.meshC = c; o.meshPos = null; o.meshH = null; if (o.fill == null) o.fill = base
     }
 
     private fun meshDown(x: Float, y: Float) {
         meshObj()?.takeIf { it.mesh != null }?.let { o ->
+            if (meshV in 0 until o.meshR * o.meshC) {
+                for (d in 0 until 4) {
+                    val hp = meshHandle(o, meshV, d) ?: continue
+                    if (hypot(scrX(hp.x) - x, scrY(hp.y) - y) < 28f) { meshHdir = d; mode = M_MESHH; return }
+                }
+            }
             for (k in 0 until o.meshR * o.meshC) {
                 val p = meshPt(o, k)
-                if (hypot(scrX(p.x) - x, scrY(p.y) - y) < 30f) { meshV = k; invalidate(); onChange(); return }
+                if (hypot(scrX(p.x) - x, scrY(p.y) - y) < 30f) { meshV = k; mode = M_MESHV; invalidate(); onChange(); return }
             }
         }
         val h = topHit(ox0, oy0)
@@ -684,6 +700,43 @@ class VecCanvas(ctx: Context) : View(ctx) {
             meshV = -1; changed()
         } else { meshV = -1; invalidate() }
     }
+
+    private fun meshDrag(rx: Float, ry: Float) {
+        val o = meshObj() ?: return; val r = o.meshR; val c = o.meshC
+        if (o.mesh == null || meshV !in 0 until r * c) return
+        val b = o.bounds(); if (b.width() < 1e-3f || b.height() < 1e-3f) return
+        var pos = o.meshPos
+        if (pos == null) { pos = FloatArray(r * c * 2) { k -> if (k % 2 == 0) ((k / 2) % c) / (c - 1f) else ((k / 2) / c) / (r - 1f) }; o.meshPos = pos }
+        pos[meshV * 2] = ((rx - b.left) / b.width()).coerceIn(-0.2f, 1.2f)
+        pos[meshV * 2 + 1] = ((ry - b.top) / b.height()).coerceIn(-0.2f, 1.2f)
+    }
+
+    /** Neighbour vertex index in direction d (0 left, 1 right, 2 up, 3 down), or -1 on the border. */
+    private fun meshNeighbor(o: VObj, k: Int, d: Int): Int {
+        val c = o.meshC; val i = k / c; val j = k % c
+        return when (d) { 0 -> if (j > 0) k - 1 else -1; 1 -> if (j < c - 1) k + 1 else -1; 2 -> if (i > 0) k - c else -1; else -> if (i < o.meshR - 1) k + c else -1 }
+    }
+
+    private fun meshHandle(o: VObj, k: Int, d: Int): PointF? {
+        val nb = meshNeighbor(o, k, d); if (nb < 0) return null
+        return Render.meshCtrl(o, k, nb, d, o.bounds())
+    }
+
+    private fun meshHandleDrag(rx: Float, ry: Float) {
+        val o = meshObj() ?: return; val k = meshV; val d = meshHdir
+        if (o.mesh == null || k !in 0 until o.meshR * o.meshC || d !in 0..3) return
+        val nb = meshNeighbor(o, k, d); if (nb < 0) return
+        val b = o.bounds(); if (b.width() < 1e-3f || b.height() < 1e-3f) return
+        val pa = Render.meshVertex(o, k, b); val pb = Render.meshVertex(o, nb, b)
+        var h = o.meshH
+        if (h == null || h.size < o.meshR * o.meshC * 8) { h = FloatArray(o.meshR * o.meshC * 8); o.meshH = h }
+        h[k * 8 + d * 2] = (rx - (pa.x + (pb.x - pa.x) / 3)) / b.width()
+        h[k * 8 + d * 2 + 1] = (ry - (pa.y + (pb.y - pa.y) / 3)) / b.height()
+    }
+
+    fun meshStraighten() { val t = sel.filter { it.meshH != null }; if (t.isEmpty()) return; checkpoint(); t.forEach { it.meshH = null }; changed() }
+
+    fun meshReset() { val t = sel.filter { it.meshPos != null }; if (t.isEmpty()) return; checkpoint(); t.forEach { it.meshPos = null }; changed() }
 
     /** Apply meshRows x meshCols to the selected closed paths (re-samples an existing mesh). */
     fun meshApply() { val t = sel.filter { it.kind == Kind.PATH && it.closed }; if (t.isEmpty()) return; checkpoint(); t.forEach { makeMesh(it, meshRows, meshCols) }; meshV = -1; changed() }

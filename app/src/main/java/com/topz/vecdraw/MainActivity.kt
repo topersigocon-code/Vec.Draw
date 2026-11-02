@@ -5,7 +5,9 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.*
 import android.graphics.drawable.GradientDrawable
+import android.content.res.Configuration
 import android.net.Uri
+import android.text.TextUtils
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
@@ -35,32 +37,58 @@ class CreateAny : ActivityResultContract<Pair<String, String>, Uri?>() {
     override fun parseResult(resultCode: Int, intent: Intent?): Uri? = if (resultCode == Activity.RESULT_OK) intent?.data else null
 }
 
-/** Flat vector tool icon drawn from a 24x24 path string. */
+/** Flat vector tool icon. Parts split by '|': plain = outline, '~' = soft accent fill, '@' = solid node marker (24x24 grid). */
 class IconView(ctx: Context, d: String) : View(ctx) {
-    private val path = PathParser.createPathFromPathData(d)
-    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.8f; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
-    override fun onDraw(c: Canvas) {
-        val s = min(width, height) / 24f; c.save(); c.scale(s, s)
-        p.strokeWidth = 1.8f; p.color = if (isSelected) 0xFF0B192C.toInt() else Color.WHITE; c.drawPath(path, p); c.restore()
+    private class Part(val kind: Char, val path: Path)
+    private val parts = d.split("|").map { s ->
+        val k = if (s.startsWith("~")) '~' else if (s.startsWith("@")) '@' else '-'
+        Part(k, try { PathParser.createPathFromPathData(if (k == '-') s else s.substring(1)) } catch (e: Exception) { Path() })
     }
-    private fun min(a: Int, b: Int) = if (a < b) a else b
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
+    override fun onDraw(c: Canvas) {
+        val s = minOf(width, height) / 24f; c.save(); c.scale(s, s)
+        val ink = if (isSelected) 0xFF0B192C.toInt() else 0xFFEAEFF5.toInt()
+        val accent = if (isSelected) 0x330B192C else 0x66E5A93C
+        val node = if (isSelected) 0xFF0B192C.toInt() else GOLD
+        for (part in parts) when (part.kind) {
+            '~' -> { p.style = Paint.Style.FILL; p.color = accent; c.drawPath(part.path, p) }
+            '@' -> { p.style = Paint.Style.FILL; p.color = node; c.drawPath(part.path, p) }
+            else -> { p.style = Paint.Style.STROKE; p.strokeWidth = 1.8f; p.color = ink; c.drawPath(part.path, p) }
+        }
+        c.restore()
+    }
+}
+
+/** Scroll wrapper whose row can flip between horizontal (HorizontalScrollView) and vertical (ScrollView) layouts. */
+class AdaptiveScroll(ctx: Context, private val row: LinearLayout) : FrameLayout(ctx) {
+    private var vertical = false
+    init { rebuild() }
+    fun setVertical(v: Boolean) { if (v == vertical && childCount > 0) return; vertical = v; rebuild() }
+    private fun rebuild() {
+        (row.parent as? ViewGroup)?.removeView(row); removeAllViews()
+        row.orientation = if (vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+        row.gravity = if (vertical) Gravity.CENTER_HORIZONTAL else Gravity.CENTER_VERTICAL
+        val sc: ViewGroup = if (vertical) ScrollView(context) else HorizontalScrollView(context).also { it.isHorizontalScrollBarEnabled = false }
+        sc.addView(row); addView(sc)
+    }
 }
 
 /** A draggable panel: drag by its title bar; edges snap (dock) when released near them; ✕ hides it. */
-class Dockable(ctx: Context, title: String, content: View, closable: Boolean = true, onClose: () -> Unit = {}) : LinearLayout(ctx) {
+class Dockable(ctx: Context, title: String, val content: View, closable: Boolean = true, onClose: () -> Unit = {}) : LinearLayout(ctx) {
+    var onDropped: (Dockable) -> Unit = {}
     init {
         orientation = VERTICAL
         background = GradientDrawable().apply { setColor(PANEL); cornerRadius = ctx.dp(10).toFloat(); setStroke(1, 0x44FFFFFF) }
         val head = LinearLayout(ctx).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(ctx.dp(10), ctx.dp(3), ctx.dp(6), ctx.dp(3)); setBackgroundColor(0x22FFFFFF) }
-        head.addView(TextView(ctx).apply { text = "⠿  $title"; setTextColor(GOLD); textSize = 11f }, LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        if (closable) head.addView(TextView(ctx).apply { text = "✕"; setTextColor(Color.WHITE); setPadding(ctx.dp(14), 0, ctx.dp(6), 0); setOnClickListener { visibility = GONE; onClose() } })
+        head.addView(TextView(ctx).apply { text = "⠿  $title"; setTextColor(GOLD); textSize = 11f; setSingleLine(); ellipsize = TextUtils.TruncateAt.END }, LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (closable) head.addView(TextView(ctx).apply { text = "✕"; setTextColor(Color.WHITE); setPadding(ctx.dp(10), 0, ctx.dp(4), 0); setOnClickListener { visibility = GONE; onClose() } })
         addView(head); addView(content)
         var dX = 0f; var dY = 0f
         head.setOnTouchListener { _, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> { dX = x - e.rawX; dY = y - e.rawY; bringToFront() }
                 MotionEvent.ACTION_MOVE -> { x = e.rawX + dX; y = e.rawY + dY }
-                MotionEvent.ACTION_UP -> dock()
+                MotionEvent.ACTION_UP -> { dock(); onDropped(this) }
             }
             true
         }
@@ -110,23 +138,75 @@ class MainActivity : AppCompatActivity() {
         root.doOnLayout { cv.fit(); layoutPanels(); panels["Objects"]?.visibility = View.GONE; refreshers.forEach { it() } }
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) { super.onConfigurationChanged(newConfig); root.postDelayed({ layoutPanels() }, 250) }
+
     private fun addPanel(name: String, content: View, closable: Boolean) {
-        val d = Dockable(this, name, content, closable); panels[name] = d
+        val d = Dockable(this, name, content, closable) { root.post { reflow() } }; d.onDropped = { onDropped(it) }; panels[name] = d
         root.addView(d, FrameLayout.LayoutParams(-2, -2))
     }
 
+    private fun setSize(n: String, w: Int, h: Int) { panels[n]?.let { p -> p.layoutParams = (p.layoutParams as FrameLayout.LayoutParams).also { it.width = w; it.height = h } } }
+
+    /** Default arrangement: Properties top, Status bottom, Toolbox left, Palette right (vertical) - all docked, so the canvas shrinks to fit. */
     private fun layoutPanels() {
-        val w = root.width; val h = root.height
-        fun fixW(n: String, wpx: Int) { panels[n]?.let { it.layoutParams = (it.layoutParams as FrameLayout.LayoutParams).also { lp -> lp.width = wpx }; } }
-        fixW("Properties", (w * 0.62f).toInt()); fixW("Palette", (w * 0.62f).toInt()); fixW("Status", (w * 0.5f).toInt())
-        root.post {
-            panels["Quick"]?.let { it.x = (w - it.width).toFloat(); it.y = 0f }
-            panels["Toolbox"]?.let { it.x = 0f; it.y = dp(8).toFloat() }
-            panels["Properties"]?.let { it.x = dp(100).toFloat(); it.y = 0f }
-            panels["Palette"]?.let { it.x = 0f; it.y = (h - it.height).toFloat() }
-            panels["Status"]?.let { it.x = (w - it.width).toFloat(); it.y = (h - it.height).toFloat() }
-            panels["Objects"]?.let { it.x = (w - it.width).toFloat(); it.y = dp(60).toFloat() }
+        val w = root.width; val h = root.height; val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
+        (panels["Palette"]?.content as? AdaptiveScroll)?.setVertical(true)
+        (panels["Properties"]?.content as? AdaptiveScroll)?.setVertical(false)
+        (panels["Status"]?.content as? AdaptiveScroll)?.setVertical(false)
+        setSize("Properties", w, wrap); setSize("Status", w, wrap); setSize("Palette", dp(60), (h * 0.7f).toInt())
+        root.postDelayed({
+            val top = panels["Properties"]?.height ?: 0; val gap = dp(6)
+            panels["Properties"]?.let { it.x = 0f; it.y = 0f }
+            panels["Status"]?.let { it.x = 0f; it.y = (h - it.height).toFloat() }
+            panels["Toolbox"]?.let { it.x = 0f; it.y = (top + gap).toFloat() }
+            panels["Palette"]?.let { it.x = (w - it.width).toFloat(); it.y = (top + gap).toFloat() }
+            panels["Quick"]?.let { it.x = (w - it.width - dp(70)).toFloat(); it.y = (top + gap).toFloat() }
+            panels["Objects"]?.let { it.x = (w - it.width - dp(70)).toFloat(); it.y = (top + gap + dp(50)).toFloat() }
+            reflow(); cv.postDelayed({ cv.fit() }, 80)
+        }, 100)
+    }
+
+    /** Which edge a panel is docked to: 0 none (floating), 1 left, 2 right, 3 top, 4 bottom. Only strip-like panels count. */
+    private fun sideOf(p: Dockable): Int {
+        if (p.visibility != View.VISIBLE || p.width == 0 || root.width == 0) return 0
+        val w = root.width.toFloat(); val h = root.height.toFloat(); val tol = 3f
+        val l = p.x <= tol; val r = p.x + p.width >= w - tol; val t = p.y <= tol; val b = p.y + p.height >= h - tol
+        val fw = p.width / w; val fh = p.height / h
+        val vert = (l || r) && fh >= 0.45f && fw <= 0.45f
+        val horiz = (t || b) && fw >= 0.45f && fh <= 0.45f
+        return when {
+            vert && horiz -> if (fh >= fw) (if (l) 1 else 2) else (if (t) 3 else 4)
+            vert -> if (l) 1 else 2
+            horiz -> if (t) 3 else 4
+            else -> 0
         }
+    }
+
+    /** Resize the canvas so docked panels no longer cover it (keeps the drawing visually stationary). */
+    private fun reflow() {
+        var l = 0; var r = 0; var t = 0; var b = 0
+        for (p in panels.values) when (sideOf(p)) { 1 -> l = max(l, p.width); 2 -> r = max(r, p.width); 3 -> t = max(t, p.height); 4 -> b = max(b, p.height) }
+        val lp = cv.layoutParams as FrameLayout.LayoutParams
+        if (lp.leftMargin == l && lp.rightMargin == r && lp.topMargin == t && lp.bottomMargin == b) return
+        cv.panX -= (l - lp.leftMargin); cv.panY -= (t - lp.topMargin)
+        lp.setMargins(l, t, r, b); cv.layoutParams = lp; cv.invalidate()
+    }
+
+    /** After a drop: flip adaptive panels (Properties / Palette / Status) between strip and column to suit the edge, then reflow. */
+    private fun onDropped(d: Dockable) {
+        val w = root.width; val h = root.height; val tol = 3f; val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
+        val fl = d.x <= tol; val fr = d.x + d.width >= w - tol; val ft = d.y <= tol; val fb = d.y + d.height >= h - tol
+        val name = panels.entries.firstOrNull { it.value === d }?.key ?: ""
+        val ad = d.content as? AdaptiveScroll
+        val finish = {
+            if (fl) d.x = 0f; if (fr) d.x = (w - d.width).toFloat(); if (ft) d.y = 0f; if (fb) d.y = (h - d.height).toFloat()
+            d.dock(); reflow()
+        }
+        if (ad != null && (fl || fr) && !ft && !fb) {
+            ad.setVertical(true); setSize(name, dp(if (name == "Properties") 150 else 60), (h * 0.7f).toInt()); d.postDelayed({ finish() }, 80)
+        } else if (ad != null && (ft || fb) && !fl && !fr) {
+            ad.setVertical(false); setSize(name, w, wrap); d.postDelayed({ finish() }, 80)
+        } else finish()
     }
 
     // ---------- small UI helpers ----------
@@ -146,7 +226,7 @@ class MainActivity : AppCompatActivity() {
         inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
         imeOptions = EditorInfo.IME_ACTION_DONE; layoutParams = LinearLayout.LayoutParams(dp(width), -2)
     }
-    private fun hscroll(row: View) = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(row) }
+    private fun hscroll(row: LinearLayout): View = AdaptiveScroll(this, row)
     private fun label(t: String) = TextView(this).apply { text = t; setTextColor(0xAAFFFFFF.toInt()); textSize = 11f; setPadding(dp(4), 0, dp(2), 0); gravity = Gravity.CENTER_VERTICAL }
     private fun obj() = cv.sel.firstOrNull() ?: cv.style
     private fun uf() = cv.doc.uf()
@@ -172,7 +252,7 @@ class MainActivity : AppCompatActivity() {
                 layoutParams = GridLayout.LayoutParams().apply { width = dp(46); height = dp(46); setMargins(dp(2), dp(2), dp(2), dp(2)) }
                 background = GradientDrawable().apply { setColor(0x22FFFFFF); cornerRadius = dp(8).toFloat() }
                 addView(IconView(context, t.icon), FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER))
-                setOnClickListener { cv.tool = t; toast(if (t == Tool.MESH) "Mesh: tap a shape, tap a point, then tap a colour" else t.label) }
+                setOnClickListener { cv.tool = t; toast(if (t == Tool.MESH) "Mesh: drag points; select a point, then drag its handles to curve edges; tap a colour to paint" else t.label) }
                 setOnLongClickListener { toolOptions(t); true }
             }
             icons[t] = cell; grid.addView(cell)
@@ -197,6 +277,8 @@ class MainActivity : AppCompatActivity() {
             Tool.TRANS -> transMenu()
             Tool.MESH -> menu("Mesh fill", listOf(
                 "Mesh size…" to { numDialog("Mesh vertices", listOf("Rows (2-8)", "Columns (2-8)"), listOf(cv.meshRows.toFloat(), cv.meshCols.toFloat())) { cv.meshRows = it[0].toInt().coerceIn(2, 8); cv.meshCols = it[1].toInt().coerceIn(2, 8); cv.meshApply() } },
+                "Reset point positions" to { cv.meshReset() },
+                "Straighten edges (reset handles)" to { cv.meshStraighten() },
                 "Remove mesh" to { cv.meshClear() }))
             Tool.PEN, Tool.BEZIER, Tool.POLYLINE, Tool.BSPLINE -> cv.finishPen()
             else -> {}
@@ -362,12 +444,12 @@ class MainActivity : AppCompatActivity() {
     private fun togglePanels() {
         if (!panelsHidden) { hiddenBefore.clear(); panels.forEach { (n, p) -> if (n != "Quick") { if (p.visibility == View.GONE) hiddenBefore.add(n) else p.visibility = View.GONE } } }
         else panels.forEach { (n, p) -> if (n != "Quick" && n !in hiddenBefore) p.visibility = View.VISIBLE }
-        panelsHidden = !panelsHidden
+        panelsHidden = !panelsHidden; root.post { reflow() }
     }
 
     private fun panelMenu() {
         val names = panels.keys.filter { it != "Quick" }.toTypedArray(); val checked = BooleanArray(names.size) { panels[names[it]]!!.visibility == View.VISIBLE }
-        AlertDialog.Builder(this).setTitle("Show / hide panels").setMultiChoiceItems(names, checked) { _, i, on -> panels[names[i]]!!.apply { visibility = if (on) View.VISIBLE else View.GONE; if (on) { bringToFront(); dock() } } }.setPositiveButton("Done", null).show()
+        AlertDialog.Builder(this).setTitle("Show / hide panels").setMultiChoiceItems(names, checked) { _, i, on -> panels[names[i]]!!.apply { visibility = if (on) View.VISIBLE else View.GONE; if (on) { bringToFront(); dock() } } }.setPositiveButton("Done", null).setOnDismissListener { root.post { reflow() } }.show()
     }
 
     // ---------- Menus ----------
