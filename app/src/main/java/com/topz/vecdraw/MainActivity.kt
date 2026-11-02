@@ -24,6 +24,7 @@ import androidx.core.graphics.PathParser
 import androidx.core.view.doOnLayout
 import org.json.JSONObject
 import java.io.OutputStream
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -63,6 +64,7 @@ class IconView(ctx: Context, d: String) : View(ctx) {
 class AdaptiveScroll(ctx: Context, private val row: LinearLayout) : FrameLayout(ctx) {
     private var vertical = false
     init { rebuild() }
+    fun isVerticalNow() = vertical
     fun setVertical(v: Boolean) { if (v == vertical && childCount > 0) return; vertical = v; rebuild() }
     private fun rebuild() {
         (row.parent as? ViewGroup)?.removeView(row); removeAllViews()
@@ -125,7 +127,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         root = FrameLayout(this); cv = VecCanvas(this)
-        root.addView(cv, FrameLayout.LayoutParams(-1, -1)); setContentView(root)
+        root.addView(cv, FrameLayout.LayoutParams(-1, -1)); setContentView(root); restoreSettings(); restoreDoc()
         cv.onChange = { refreshers.forEach { it() } }
         cv.onText = { o, isNew -> textDialog(o, isNew) }
         addPanel("Toolbox", toolbox(), true)
@@ -135,7 +137,77 @@ class MainActivity : AppCompatActivity() {
         addPanel("Status", statusBar(), true)
         addPanel("Quick", quickBar(), false)
         cv.onStatus = { statusTv.text = it }
-        root.doOnLayout { cv.fit(); layoutPanels(); panels["Objects"]?.visibility = View.GONE; refreshers.forEach { it() } }
+        root.doOnLayout { cv.fit(); layoutPanels(); refreshers.forEach { it() } }
+    }
+
+    override fun onPause() { super.onPause(); saveUi(); saveDoc() }
+
+    private fun autosaveFile() = java.io.File(filesDir, "autosave.vdt")
+
+    /** Autosave the current drawing to the app's private storage (no permission needed); an empty drawing clears it. */
+    private fun saveDoc() {
+        if (!::cv.isInitialized) return
+        try {
+            val f = autosaveFile()
+            if (cv.doc.objs.isEmpty()) { f.delete(); return }
+            val tmp = java.io.File(filesDir, "autosave.tmp")
+            tmp.writeText(cv.doc.toJson().toString())
+            if (!tmp.renameTo(f)) { f.delete(); tmp.renameTo(f) }
+            getSharedPreferences("vd", MODE_PRIVATE).edit().putInt("activeLayer", cv.activeLayer).apply()
+        } catch (e: Throwable) { }
+    }
+
+    private fun restoreDoc() {
+        val f = autosaveFile(); if (!f.exists()) return
+        try {
+            cv.newDoc(Doc.fromJson(JSONObject(f.readText())))
+            cv.activeLayer = getSharedPreferences("vd", MODE_PRIVATE).getInt("activeLayer", 0).coerceIn(0, cv.doc.layers.lastIndex)
+            toast("Restored your last drawing")
+        } catch (e: Throwable) { f.delete() }
+    }
+
+    private fun newDrawing() {
+        if (cv.doc.objs.isEmpty()) { cv.newDoc(Doc()); return }
+        AlertDialog.Builder(this).setTitle("New drawing?").setMessage("The current drawing will be replaced. Save it first if you need it.")
+            .setPositiveButton("New") { _, _ -> cv.newDoc(Doc()) }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun colStr(c: Int?) = c?.toString() ?: "none"
+
+    /** Persist tool settings, snapping options, default style and the panel arrangement. */
+    private fun saveUi() {
+        if (!::cv.isInitialized || root.width == 0) return
+        val e = getSharedPreferences("vd", MODE_PRIVATE).edit(); val st = cv.style
+        e.putBoolean("snapGrid", cv.snapGrid).putBoolean("snapGuides", cv.snapGuides).putBoolean("snapObjs", cv.snapObjs)
+            .putBoolean("showGrid", cv.showGrid).putBoolean("lockRatio", cv.lockRatio)
+            .putInt("meshRows", cv.meshRows).putInt("meshCols", cv.meshCols).putInt("polySides", cv.polySides).putInt("starPts", cv.starPts)
+            .putInt("palMode", palMode).putString("tool", cv.tool.name)
+            .putString("st_fill", colStr(st.fill)).putString("st_fill2", colStr(st.fill2)).putString("st_stroke", colStr(st.stroke))
+            .putFloat("st_sw", st.strokeW).putInt("st_cap", st.cap).putInt("st_join", st.join).putInt("st_dash", st.dash)
+            .putBoolean("st_arrow", st.arrow).putFloat("st_alpha", st.alpha).putBoolean("st_shadow", st.shadow)
+        val w = root.width.toFloat(); val h = root.height.toFloat()
+        for ((n, p) in panels) {
+            val vis = if (panelsHidden && n != "Quick") n !in hiddenBefore else p.visibility == View.VISIBLE
+            e.putFloat("p_${n}_x", p.x / w).putFloat("p_${n}_y", p.y / h).putBoolean("p_${n}_vis", vis)
+                .putBoolean("p_${n}_vert", (p.content as? AdaptiveScroll)?.isVerticalNow() ?: false)
+                .putInt("p_${n}_w", p.layoutParams.width).putInt("p_${n}_h", p.layoutParams.height)
+        }
+        e.putInt("ref_w", root.width).putInt("ref_h", root.height).apply()
+    }
+
+    private fun restoreSettings() {
+        val sp = getSharedPreferences("vd", MODE_PRIVATE); val st = cv.style
+        fun col(key: String, def: Int?): Int? = if (!sp.contains(key)) def else sp.getString(key, "none")?.toIntOrNull()
+        cv.snapGrid = sp.getBoolean("snapGrid", true); cv.snapGuides = sp.getBoolean("snapGuides", true); cv.snapObjs = sp.getBoolean("snapObjs", false)
+        cv.showGrid = sp.getBoolean("showGrid", true); cv.lockRatio = sp.getBoolean("lockRatio", true)
+        cv.meshRows = sp.getInt("meshRows", 3).coerceIn(2, 8); cv.meshCols = sp.getInt("meshCols", 3).coerceIn(2, 8)
+        cv.polySides = sp.getInt("polySides", 6).coerceIn(3, 30); cv.starPts = sp.getInt("starPts", 5).coerceIn(3, 30)
+        palMode = sp.getInt("palMode", 0).coerceIn(0, 3)
+        st.fill = col("st_fill", st.fill); st.fill2 = col("st_fill2", null); st.stroke = col("st_stroke", st.stroke)
+        st.strokeW = sp.getFloat("st_sw", st.strokeW); st.cap = sp.getInt("st_cap", 0).coerceIn(0, 2); st.join = sp.getInt("st_join", 0).coerceIn(0, 2)
+        st.dash = sp.getInt("st_dash", 0).coerceIn(0, 3); st.arrow = sp.getBoolean("st_arrow", false)
+        st.alpha = sp.getFloat("st_alpha", 1f); st.shadow = sp.getBoolean("st_shadow", false)
+        try { cv.tool = Tool.valueOf(sp.getString("tool", "PICK") ?: "PICK") } catch (e: Exception) { }
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) { super.onConfigurationChanged(newConfig); root.postDelayed({ layoutPanels() }, 250) }
@@ -148,8 +220,24 @@ class MainActivity : AppCompatActivity() {
     private fun setSize(n: String, w: Int, h: Int) { panels[n]?.let { p -> p.layoutParams = (p.layoutParams as FrameLayout.LayoutParams).also { it.width = w; it.height = h } } }
 
     /** Default arrangement: Properties top, Status bottom, Toolbox left, Palette right (vertical) - all docked, so the canvas shrinks to fit. */
-    private fun layoutPanels() {
+    private fun layoutPanels(reset: Boolean = false) {
         val w = root.width; val h = root.height; val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
+        val sp = getSharedPreferences("vd", MODE_PRIVATE)
+        // restore the saved arrangement if the screen size is unchanged
+        if (!reset && sp.contains("p_Toolbox_x") && abs(sp.getInt("ref_w", 0) - w) <= 2 && abs(sp.getInt("ref_h", 0) - h) <= 2) {
+            for ((n, p) in panels) {
+                (p.content as? AdaptiveScroll)?.setVertical(sp.getBoolean("p_${n}_vert", false))
+                setSize(n, sp.getInt("p_${n}_w", wrap), sp.getInt("p_${n}_h", wrap))
+                p.visibility = if (n == "Quick" || sp.getBoolean("p_${n}_vis", true)) View.VISIBLE else View.GONE
+            }
+            root.postDelayed({
+                for ((n, p) in panels) { p.x = sp.getFloat("p_${n}_x", 0f) * w; p.y = sp.getFloat("p_${n}_y", 0f) * h }
+                reflow(); cv.postDelayed({ cv.fit() }, 80)
+            }, 100)
+            return
+        }
+        if (reset) { panelsHidden = false; hiddenBefore.clear(); panels.values.forEach { it.visibility = View.VISIBLE } }
+        if (reset || !sp.contains("p_Objects_vis")) panels["Objects"]?.visibility = View.GONE
         (panels["Palette"]?.content as? AdaptiveScroll)?.setVertical(true)
         (panels["Properties"]?.content as? AdaptiveScroll)?.setVertical(false)
         (panels["Status"]?.content as? AdaptiveScroll)?.setVertical(false)
@@ -455,10 +543,10 @@ class MainActivity : AppCompatActivity() {
     // ---------- Menus ----------
     private fun mainMenu() = menu("VecDraw by Topz", listOf(
         "File" to { fileMenu() }, "Edit" to { editMenu() }, "Arrange / Transform" to { arrangeMenu() },
-        "Effects" to { effectsMenu() }, "Page & Grid" to { pageMenu() }, "Panels" to { panelMenu() }))
+        "Effects" to { effectsMenu() }, "Page & Grid" to { pageMenu() }, "Panels" to { panelMenu() }, "Reset panel layout" to { layoutPanels(true) }))
 
     private fun fileMenu() = menu("File", listOf(
-        "New" to { cv.newDoc(Doc()) },
+        "New" to { newDrawing() },
         "Open project (.vdt)…" to { openProject.launch(arrayOf("*/*")) },
         "Save project (.vdt)…" to { write("drawing.vdt", "application/json") { it.write(cv.doc.toJson().toString().toByteArray()) } },
         "Export SVG (vector)…" to { write("drawing.svg", "image/svg+xml") { it.write(Export.svg(cv.doc).toByteArray()) } },

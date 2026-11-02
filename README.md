@@ -9,3 +9,5 @@ Transparency: uniform (α slider), fountain and bitmap-pattern masks (built-in p
 Mesh points can be dragged. Mesh edges are cubic curves (drag a selected point's 4 handles)., true contour offset, perspective extrude, panel re-flow on docking.
 
 Docking: Properties/Status/Toolbox/Palette are docked by default; docked panels shrink the canvas, floating ones overlay it. Dragging Properties/Palette/Status to a left/right edge turns them into a column, to top/bottom into a strip.
+Saved between sessions (SharedPreferences, on pause): panel positions/sizes/visibility, snapping and grid toggles, last tool, default fill/outline style, mesh/polygon/star settings. Menu: Reset panel layout.
+Autosave: the drawing is written to internal storage (autosave.vdt) whenever the app is paused and restored on next launch (undo history is not kept). Use Save project to keep a copy you can share.
