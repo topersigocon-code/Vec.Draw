@@ -11,3 +11,4 @@ Mesh points can be dragged. Mesh edges are cubic curves (drag a selected point's
 Docking: Properties/Status/Toolbox/Palette are docked by default; docked panels shrink the canvas, floating ones overlay it. Dragging Properties/Palette/Status to a left/right edge turns them into a column, to top/bottom into a strip.
 Saved between sessions (SharedPreferences, on pause): panel positions/sizes/visibility, snapping and grid toggles, last tool, default fill/outline style, mesh/polygon/star settings. Menu: Reset panel layout.
 Autosave: the drawing is written to internal storage (autosave.vdt) whenever the app is paused and restored on next launch (undo history is not kept). Use Save project to keep a copy you can share.
+SVG import (paths, basic shapes, groups, transforms, solid colours), true contour offset (path booleans), perspective extrude, and mesh / gradient / pattern frames that rotate with the object.

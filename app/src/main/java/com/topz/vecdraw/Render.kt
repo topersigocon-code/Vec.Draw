@@ -16,13 +16,14 @@ object Render {
         return when (o.dash) { 1 -> floatArrayOf(4 * w, 2 * w); 2 -> floatArrayOf(w, 2 * w); 3 -> floatArrayOf(4 * w, 2 * w, w, 2 * w); else -> null }
     }
 
-    fun gradPts(o: VObj): FloatArray = linePts(o.bounds(), o.gradAngle)
-
-    fun linePts(b: RectF, angle: Float): FloatArray {
-        val r = max(b.width(), b.height()) / 2f; val a = Math.toRadians(angle.toDouble())
+    /** Gradient / fountain axis through the centre of the shape's own (rotated) frame. */
+    fun framePts(o: VObj, angle: Float): FloatArray {
+        val f = frameOf(o); val c = f.center(); val r = max(f.b.width(), f.b.height()) / 2f; val a = Math.toRadians((angle + o.fRot).toDouble())
         val dx = (cos(a) * r).toFloat(); val dy = (sin(a) * r).toFloat()
-        return floatArrayOf(b.centerX() - dx, b.centerY() - dy, b.centerX() + dx, b.centerY() + dy)
+        return floatArrayOf(c.x - dx, c.y - dy, c.x + dx, c.y + dy)
     }
+
+    fun gradPts(o: VObj): FloatArray = framePts(o, o.gradAngle)
 
     private fun a255(o: VObj, la: Float) = (255 * o.alpha * la).toInt().coerceIn(0, 255)
 
@@ -75,24 +76,42 @@ object Render {
         return mix(mix(m[i * c + j], m[i * c + j + 1], tx), mix(m[(i + 1) * c + j], m[(i + 1) * c + j + 1], tx), ty)
     }
 
-    /** Vertex position in document space (regular grid unless the user moved points). */
-    fun meshVertex(o: VObj, idx: Int, b: RectF): PointF {
+    /** Local frame of a shape: bounds measured after undoing its accumulated rotation, so mesh / pattern / gradient turn with it. */
+    class Frame(val b: RectF, val px: Float, val py: Float, val rot: Float) {
+        private val cs = cos(Math.toRadians(rot.toDouble())).toFloat(); private val sn = sin(Math.toRadians(rot.toDouble())).toFloat()
+        fun toDoc(x: Float, y: Float) = PointF(px + (x - px) * cs - (y - py) * sn, py + (x - px) * sn + (y - py) * cs)
+        fun toLocal(x: Float, y: Float) = PointF(px + (x - px) * cs + (y - py) * sn, py - (x - px) * sn + (y - py) * cs)
+        fun vecToDoc(x: Float, y: Float) = PointF(x * cs - y * sn, x * sn + y * cs)
+        fun vecToLocal(x: Float, y: Float) = PointF(x * cs + y * sn, -x * sn + y * cs)
+        fun center() = toDoc(b.centerX(), b.centerY())
+    }
+
+    fun frameOf(o: VObj): Frame {
+        val ab = o.bounds(); val px = ab.centerX(); val py = ab.centerY(); val r = o.fRot
+        if (r == 0f || o.kind != Kind.PATH) return Frame(ab, px, py, 0f)
+        val p = o.path(); p.transform(Matrix().apply { setRotate(-r, px, py) })
+        val lb = RectF(); p.computeBounds(lb, true)
+        return Frame(lb, px, py, r)
+    }
+
+    /** Vertex position in document space (regular grid in the shape's frame unless the user moved points). */
+    fun meshVertex(o: VObj, idx: Int, f: Frame): PointF {
         val pos = o.meshPos; val c = o.meshC; val r = o.meshR
         val u = if (pos != null && pos.size >= (idx + 1) * 2) pos[idx * 2] else (idx % c) / (c - 1f)
         val v = if (pos != null && pos.size >= (idx + 1) * 2) pos[idx * 2 + 1] else (idx / c) / (r - 1f)
-        return PointF(b.left + b.width() * u, b.top + b.height() * v)
+        return f.toDoc(f.b.left + f.b.width() * u, f.b.top + f.b.height() * v)
     }
 
     /** Control point at vertex a of the cubic edge towards neighbour b: 1/3 along the edge plus the stored handle offset. */
-    fun meshCtrl(o: VObj, a: Int, b: Int, dir: Int, bb: RectF): PointF {
-        val pa = meshVertex(o, a, bb); val pb = meshVertex(o, b, bb); val h = o.meshH
-        var dx = 0f; var dy = 0f
-        if (h != null && h.size >= (a + 1) * 8) { dx = h[a * 8 + dir * 2] * bb.width(); dy = h[a * 8 + dir * 2 + 1] * bb.height() }
-        return PointF(pa.x + (pb.x - pa.x) / 3 + dx, pa.y + (pb.y - pa.y) / 3 + dy)
+    fun meshCtrl(o: VObj, a: Int, b: Int, dir: Int, f: Frame): PointF {
+        val pa = meshVertex(o, a, f); val pb = meshVertex(o, b, f); val h = o.meshH
+        var d = PointF(0f, 0f)
+        if (h != null && h.size >= (a + 1) * 8) d = f.vecToDoc(h[a * 8 + dir * 2] * f.b.width(), h[a * 8 + dir * 2 + 1] * f.b.height())
+        return PointF(pa.x + (pb.x - pa.x) / 3 + d.x, pa.y + (pb.y - pa.y) / 3 + d.y)
     }
 
-    private fun edgePts(o: VObj, a: Int, b: Int, da: Int, db: Int, bb: RectF, n: Int): Array<PointF> {
-        val p0 = meshVertex(o, a, bb); val p3 = meshVertex(o, b, bb); val p1 = meshCtrl(o, a, b, da, bb); val p2 = meshCtrl(o, b, a, db, bb)
+    private fun edgePts(o: VObj, a: Int, b: Int, da: Int, db: Int, f: Frame, n: Int): Array<PointF> {
+        val p0 = meshVertex(o, a, f); val p3 = meshVertex(o, b, f); val p1 = meshCtrl(o, a, b, da, f); val p2 = meshCtrl(o, b, a, db, f)
         return Array(n + 1) { k ->
             val t = k / n.toFloat(); val u = 1 - t
             PointF(u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
@@ -107,12 +126,12 @@ object Render {
     fun meshCells(o: VObj): List<MeshCell> {
         val m = o.mesh ?: return emptyList(); val r = o.meshR; val c = o.meshC
         if (r < 2 || c < 2 || m.size < r * c) return emptyList()
-        val b = o.bounds(); val n = MESH_SUB; val out = ArrayList<MeshCell>((r - 1) * (c - 1) * n * n)
+        val f = frameOf(o); val n = MESH_SUB; val out = ArrayList<MeshCell>((r - 1) * (c - 1) * n * n)
         for (i in 0 until r - 1) for (j in 0 until c - 1) {
             val i00 = i * c + j; val i01 = i00 + 1; val i10 = i00 + c; val i11 = i10 + 1
-            val p00 = meshVertex(o, i00, b); val p01 = meshVertex(o, i01, b); val p10 = meshVertex(o, i10, b); val p11 = meshVertex(o, i11, b)
-            val top = edgePts(o, i00, i01, 1, 0, b, n); val bot = edgePts(o, i10, i11, 1, 0, b, n)
-            val left = edgePts(o, i00, i10, 3, 2, b, n); val right = edgePts(o, i01, i11, 3, 2, b, n)
+            val p00 = meshVertex(o, i00, f); val p01 = meshVertex(o, i01, f); val p10 = meshVertex(o, i10, f); val p11 = meshVertex(o, i11, f)
+            val top = edgePts(o, i00, i01, 1, 0, f, n); val bot = edgePts(o, i10, i11, 1, 0, f, n)
+            val left = edgePts(o, i00, i10, 3, 2, f, n); val right = edgePts(o, i01, i11, 3, 2, f, n)
             val gx = Array(n + 1) { FloatArray(n + 1) }; val gy = Array(n + 1) { FloatArray(n + 1) }
             for (iv in 0..n) for (iu in 0..n) {
                 val u = iu / n.toFloat(); val v = iv / n.toFloat()
@@ -155,12 +174,12 @@ object Render {
         drawBase(c, o, la)
         val mp = Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN); isFilterBitmap = true }
         if (o.tMode == 1) {
-            val g = linePts(o.bounds(), o.tAngle)
+            val g = framePts(o, o.tAngle)
             mp.shader = LinearGradient(g[0], g[1], g[2], g[3],
                 Color.argb((o.tA1.coerceIn(0f, 1f) * 255).toInt(), 0, 0, 0), Color.argb((o.tA2.coerceIn(0f, 1f) * 255).toInt(), 0, 0, 0), Shader.TileMode.CLAMP)
         } else {
-            val bmp = Pat.baked(o); val ob = o.bounds(); val s = o.tTile / bmp.width
-            mp.shader = BitmapShader(bmp, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT).apply { setLocalMatrix(Matrix().apply { setScale(s, s); postTranslate(ob.left, ob.top) }) }
+            val bmp = Pat.baked(o); val fr = frameOf(o); val s = o.tTile / bmp.width
+            mp.shader = BitmapShader(bmp, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT).apply { setLocalMatrix(Matrix().apply { setScale(s, s); postTranslate(fr.b.left, fr.b.top); postRotate(fr.rot, fr.px, fr.py) }) }
             mp.colorFilter = LUM_TO_ALPHA
         }
         c.drawRect(b, mp)
@@ -297,14 +316,14 @@ object Export {
         fun gray(a: Float) = (a.coerceIn(0f, 1f) * 255).toInt()
         val fillRef: String
         if (o.tMode == 1) {
-            val g = Render.linePts(ob, o.tAngle)
+            val g = Render.framePts(o, o.tAngle)
             sb.append("<linearGradient id=\"tg$id\" gradientUnits=\"userSpaceOnUse\" x1=\"${f(g[0])}\" y1=\"${f(g[1])}\" x2=\"${f(g[2])}\" y2=\"${f(g[3])}\">")
             sb.append("<stop offset=\"0\" stop-color=\"rgb(${gray(o.tA1)},${gray(o.tA1)},${gray(o.tA1)})\"/><stop offset=\"1\" stop-color=\"rgb(${gray(o.tA2)},${gray(o.tA2)},${gray(o.tA2)})\"/></linearGradient>")
             fillRef = "url(#tg$id)"
         } else {
-            val bmp = Pat.baked(o); val tw = o.tTile; val th = o.tTile * bmp.height / bmp.width
+            val bmp = Pat.baked(o); val fr = Render.frameOf(o); val tw = o.tTile; val th = o.tTile * bmp.height / bmp.width
             val data = Base64.encodeToString(Png.bytes(bmp), Base64.NO_WRAP)
-            sb.append("<pattern id=\"tpat$id\" patternUnits=\"userSpaceOnUse\" x=\"${f(ob.left)}\" y=\"${f(ob.top)}\" width=\"${f(tw)}\" height=\"${f(th)}\">")
+            sb.append("<pattern id=\"tpat$id\" patternUnits=\"userSpaceOnUse\" patternTransform=\"rotate(${f(fr.rot)} ${f(fr.px)} ${f(fr.py)})\" x=\"${f(fr.b.left)}\" y=\"${f(fr.b.top)}\" width=\"${f(tw)}\" height=\"${f(th)}\">")
             sb.append("<image width=\"${f(tw)}\" height=\"${f(th)}\" preserveAspectRatio=\"none\" xlink:href=\"data:image/png;base64,$data\"/></pattern>")
             fillRef = "url(#tpat$id)"
         }

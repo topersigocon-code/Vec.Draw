@@ -120,6 +120,7 @@ class MainActivity : AppCompatActivity() {
     private val openImage = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) loadImage(uri) }
     private val openMask = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) loadMask(uri) }
     private var maskArgs = floatArrayOf(1f, 0f, 10f)
+    private val openSvg = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) loadSvg(uri) }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
     private fun write(name: String, mime: String, w: (OutputStream) -> Unit) { pendingWrite = w; createDoc.launch(name to mime) }
@@ -552,7 +553,8 @@ class MainActivity : AppCompatActivity() {
         "Export SVG (vector)…" to { write("drawing.svg", "image/svg+xml") { it.write(Export.svg(cv.doc).toByteArray()) } },
         "Export PDF (vector)…" to { write("drawing.pdf", "application/pdf") { Export.pdf(cv.doc, it) } },
         "Export PNG…" to { dpiMenu(false) }, "Export JPEG…" to { dpiMenu(true) },
-        "Import image (reference trace)…" to { openImage.launch(arrayOf("image/*")) }))
+        "Import image (reference trace)…" to { openImage.launch(arrayOf("image/*")) },
+        "Import SVG…" to { openSvg.launch(arrayOf("*/*")) }))
 
     private fun dpiMenu(jpeg: Boolean) = menu("Resolution", listOf(72, 150, 300, 600).map { dpi ->
         "$dpi DPI" to {
@@ -576,8 +578,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun effectsMenu() = menu("Effects", listOf(
         "Drop shadow on/off" to { val n = !obj().shadow; cv.style.shadow = n; cv.editSel { it.shadow = n } },
-        "Contour (approx.)…" to { numDialog("Contour", listOf("Offset per step (mm)", "Steps", "Outward = 1, inward = 0"), listOf(2f, 3f, 1f)) { cv.contour(it[0], it[1].toInt().coerceIn(1, 40), it[2] > 0.5f) } },
+        "Contour…" to { numDialog("Contour", listOf("Offset per step (mm)", "Steps", "Outward = 1, inward = 0", "Corners: 0 round, 1 sharp, 2 bevel"), listOf(2f, 3f, 1f, 0f)) { cv.contour(it[0], it[1].toInt().coerceIn(1, 40), it[2] > 0.5f, it[3].toInt()) } },
         "Blend (select 2 shapes)…" to { numDialog("Blend", listOf("Steps"), listOf(6f)) { cv.blend(it[0].toInt().coerceIn(1, 60)) } },
+        "Extrude (perspective)…" to { numDialog("Perspective extrude", listOf("Depth %", "Vanishing point X offset (mm)", "Vanishing point Y offset (mm)", "Steps"), listOf(40f, 40f, -30f, 20f)) { cv.extrudePersp(it[0], it[1], it[2], it[3].toInt().coerceIn(2, 80)) } },
         "Extrude (oblique)…" to { numDialog("Extrude", listOf("Depth (mm)", "Angle (°)", "Steps"), listOf(12f, 45f, 14f)) { cv.extrude(it[0], it[1], it[2].toInt().coerceIn(2, 60)) } },
         "Transparency ▸ (uniform = α slider)" to { transMenu() }))
 
@@ -631,6 +634,13 @@ class MainActivity : AppCompatActivity() {
         val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = s })
         if (bmp == null) toast("Unsupported image") else { cv.transPatternImage(bmp, maskArgs[0], maskArgs[1], maskArgs[2]); toast("Light areas stay visible, dark areas fade") }
     } catch (e: Exception) { toast("Could not load mask: ${e.message}") }
+
+    private fun loadSvg(uri: Uri) = try {
+        val txt = contentResolver.openInputStream(uri)!!.use { String(it.readBytes()) }
+        val list = SvgImport.parse(txt, cv.activeLayer.coerceIn(0, cv.doc.layers.lastIndex))
+        if (list.isEmpty()) toast("No importable shapes (text, images, clips and <use> are skipped)")
+        else { cv.importObjects(list); toast("Imported ${list.size} shapes") }
+    } catch (e: Exception) { toast("Could not import SVG: ${e.message}") }
 
     // ---------- Storage (SAF) ----------
     private fun loadProject(uri: Uri) = try {

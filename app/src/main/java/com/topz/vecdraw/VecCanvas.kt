@@ -651,6 +651,23 @@ class VecCanvas(ctx: Context) : View(ctx) {
     }
     fun detachText() { sel.filter { it.kind == Kind.TEXT && it.onPath }.let { if (it.isNotEmpty()) { checkpoint(); it.forEach { t -> t.onPath = false; t.nodes.clear() }; changed() } } }
 
+    /** Place imported shapes: kept where they are if they fit on the page, otherwise scaled down (if needed) and centred. */
+    fun importObjects(objs: List<VObj>) {
+        if (objs.isEmpty()) return
+        val b = RectF(objs[0].bounds()); objs.forEach { b.union(it.bounds()) }
+        val m = Matrix(); val page = RectF(0f, 0f, doc.w, doc.h)
+        if (!page.contains(b) && b.width() > 0f && b.height() > 0f) {
+            val s = if (b.width() > doc.w || b.height() > doc.h) min(doc.w * 0.9f / b.width(), doc.h * 0.9f / b.height()) else 1f
+            m.setScale(s, s, b.left, b.top)
+            val nb = RectF(); m.mapRect(nb, b)
+            m.postTranslate((doc.w - nb.width()) / 2 - nb.left, (doc.h - nb.height()) / 2 - nb.top)
+        }
+        checkpoint()
+        val k = m.mapRadius(1f)
+        objs.forEach { it.transform(m); it.fRot = 0f; it.strokeW *= k; it.layer = activeLayer.coerceIn(0, doc.layers.lastIndex); doc.objs.add(it) }
+        sel.clear(); sel.addAll(objs); selNode = -1; changed()
+    }
+
     fun importImage(bmp: Bitmap) {
         checkpoint()
         doc.layers.add(Layer("Reference", true, true, 0.5f)); val ri = doc.layers.lastIndex
@@ -670,7 +687,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     // ---------- Mesh fill ----------
     private fun meshObj(): VObj? = sel.firstOrNull { it.kind == Kind.PATH && it.closed }
 
-    private fun meshPt(o: VObj, idx: Int): PointF = Render.meshVertex(o, idx, o.bounds())
+    private fun meshPt(o: VObj, idx: Int): PointF = Render.meshVertex(o, idx, Render.frameOf(o))
 
     private fun makeMesh(o: VObj, rows: Int, cols: Int) {
         val r = rows.coerceIn(2, 8); val c = cols.coerceIn(2, 8)
@@ -704,11 +721,12 @@ class VecCanvas(ctx: Context) : View(ctx) {
     private fun meshDrag(rx: Float, ry: Float) {
         val o = meshObj() ?: return; val r = o.meshR; val c = o.meshC
         if (o.mesh == null || meshV !in 0 until r * c) return
-        val b = o.bounds(); if (b.width() < 1e-3f || b.height() < 1e-3f) return
+        val f = Render.frameOf(o); if (f.b.width() < 1e-3f || f.b.height() < 1e-3f) return
         var pos = o.meshPos
         if (pos == null) { pos = FloatArray(r * c * 2) { k -> if (k % 2 == 0) ((k / 2) % c) / (c - 1f) else ((k / 2) / c) / (r - 1f) }; o.meshPos = pos }
-        pos[meshV * 2] = ((rx - b.left) / b.width()).coerceIn(-0.2f, 1.2f)
-        pos[meshV * 2 + 1] = ((ry - b.top) / b.height()).coerceIn(-0.2f, 1.2f)
+        val l = f.toLocal(rx, ry)
+        pos[meshV * 2] = ((l.x - f.b.left) / f.b.width()).coerceIn(-0.2f, 1.2f)
+        pos[meshV * 2 + 1] = ((l.y - f.b.top) / f.b.height()).coerceIn(-0.2f, 1.2f)
     }
 
     /** Neighbour vertex index in direction d (0 left, 1 right, 2 up, 3 down), or -1 on the border. */
@@ -719,19 +737,20 @@ class VecCanvas(ctx: Context) : View(ctx) {
 
     private fun meshHandle(o: VObj, k: Int, d: Int): PointF? {
         val nb = meshNeighbor(o, k, d); if (nb < 0) return null
-        return Render.meshCtrl(o, k, nb, d, o.bounds())
+        return Render.meshCtrl(o, k, nb, d, Render.frameOf(o))
     }
 
     private fun meshHandleDrag(rx: Float, ry: Float) {
         val o = meshObj() ?: return; val k = meshV; val d = meshHdir
         if (o.mesh == null || k !in 0 until o.meshR * o.meshC || d !in 0..3) return
         val nb = meshNeighbor(o, k, d); if (nb < 0) return
-        val b = o.bounds(); if (b.width() < 1e-3f || b.height() < 1e-3f) return
-        val pa = Render.meshVertex(o, k, b); val pb = Render.meshVertex(o, nb, b)
+        val f = Render.frameOf(o); if (f.b.width() < 1e-3f || f.b.height() < 1e-3f) return
+        val pa = Render.meshVertex(o, k, f); val pb = Render.meshVertex(o, nb, f)
         var h = o.meshH
         if (h == null || h.size < o.meshR * o.meshC * 8) { h = FloatArray(o.meshR * o.meshC * 8); o.meshH = h }
-        h[k * 8 + d * 2] = (rx - (pa.x + (pb.x - pa.x) / 3)) / b.width()
-        h[k * 8 + d * 2 + 1] = (ry - (pa.y + (pb.y - pa.y) / 3)) / b.height()
+        val dv = f.vecToLocal(rx - (pa.x + (pb.x - pa.x) / 3), ry - (pa.y + (pb.y - pa.y) / 3))
+        h[k * 8 + d * 2] = dv.x / f.b.width()
+        h[k * 8 + d * 2 + 1] = dv.y / f.b.height()
     }
 
     fun meshStraighten() { val t = sel.filter { it.meshH != null }; if (t.isEmpty()) return; checkpoint(); t.forEach { it.meshH = null }; changed() }
@@ -834,17 +853,34 @@ class VecCanvas(ctx: Context) : View(ctx) {
     private fun lerpColor(a: Int, b: Int, t: Float) = Color.rgb(
         (Color.red(a) + (Color.red(b) - Color.red(a)) * t).toInt(), (Color.green(a) + (Color.green(b) - Color.green(a)) * t).toInt(), (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * t).toInt())
 
-    /** Approximate contour: concentric copies scaled about the bounding-box centre (not a true path offset). */
-    fun contour(dist: Float, steps: Int, outward: Boolean) {
+    /**
+     * True contour: each step offsets the outline by stroking it (round / sharp / bevel corners) and combining the
+     * stroke band with the shape using path booleans. Results are polylines (finely flattened) and every resulting
+     * piece becomes its own shape, so holes in the result are not preserved.
+     */
+    fun contour(dist: Float, steps: Int, outward: Boolean, joinKind: Int = 0) {
         val o = sel.firstOrNull { it.kind == Kind.PATH && it.closed } ?: return
-        checkpoint(); val b = o.bounds(); val half = max(min(b.width(), b.height()) / 2f, 0.5f)
-        val at = doc.objs.indexOf(o); val made = mutableListOf<VObj>()
+        val join = arrayOf(Paint.Join.ROUND, Paint.Join.MITER, Paint.Join.BEVEL)[joinKind.coerceIn(0, 2)]
+        val src = o.path(); val at = doc.objs.indexOf(o); val made = mutableListOf<VObj>()
         for (i in 1..steps) {
-            val s = ((half + (if (outward) 1 else -1) * dist * i) / half).coerceAtLeast(0.03f)
-            val c = o.copy(); c.shadow = false; c.transform(Matrix().apply { setScale(s, s, b.centerX(), b.centerY()) })
-            val t = i.toFloat() / (steps + 1)
-            c.fill = o.fill?.let { lerpColor(it, Color.WHITE, t * 0.7f) }; made.add(c)
+            val ring = Path()
+            Paint().apply { style = Paint.Style.STROKE; strokeWidth = dist * i * 2f; strokeJoin = join; strokeMiter = 4f; strokeCap = Paint.Cap.ROUND }.getFillPath(src, ring)
+            val res = Path(); val ok = if (outward) res.op(src, ring, Path.Op.UNION) else res.op(src, ring, Path.Op.DIFFERENCE)
+            if (!ok || res.isEmpty) break
+            val t = i.toFloat() / (steps + 1); val pm = PathMeasure(res, false); var got = false
+            do {
+                val len = pm.length; if (len <= 0.5f) continue
+                val n = max(8, min(1500, (len / 0.25f).toInt())); val pos = FloatArray(2)
+                val pts = List(n) { k -> pm.getPosTan(len * k / n, pos, null); PointF(pos[0], pos[1]) }
+                val c = o.copy(); c.shadow = false; c.mesh = null; c.meshPos = null; c.meshH = null; c.fill2 = null; c.tMode = 0
+                c.nodes = Geo.rdp(pts, 0.02f).map { Node(it.x, it.y) }.toMutableList(); c.closed = true
+                c.fill = o.fill?.let { Render.mix(it, Color.WHITE, t * 0.7f) }
+                made.add(c); got = true
+            } while (pm.nextContour())
+            if (!got) break
         }
+        if (made.isEmpty()) return
+        checkpoint()
         if (outward) doc.objs.addAll(at, made.reversed()) else doc.objs.addAll(at + 1, made)
         changed()
     }
@@ -867,6 +903,21 @@ class VecCanvas(ctx: Context) : View(ctx) {
             o.strokeW = a.strokeW + (b.strokeW - a.strokeW) * t; made.add(o)
         }
         doc.objs.addAll(ins, made); changed()
+    }
+
+    /** Perspective extrude: every layer is the shape scaled toward a vanishing point (offset from the shape's centre), shaded toward the back. */
+    fun extrudePersp(depthPct: Float, vpOffX: Float, vpOffY: Float, steps: Int) {
+        val o = sel.firstOrNull { it.kind == Kind.PATH } ?: return; checkpoint()
+        val b = o.bounds(); val vx = b.centerX() + vpOffX; val vy = b.centerY() + vpOffY
+        val at = doc.objs.indexOf(o); val made = mutableListOf<VObj>(); val d = (depthPct / 100f).coerceIn(0.02f, 0.95f)
+        for (i in steps downTo 1) {
+            val f = i.toFloat() / steps; val s = 1f - d * f
+            val c = o.copy(); c.shadow = false; c.transform(Matrix().apply { setScale(s, s, vx, vy) }); c.fRot = o.fRot
+            val shade = 0.25f + 0.35f * f
+            c.fill = o.fill?.let { lerpColor(it, Color.BLACK, shade) }; c.fill2 = null; c.mesh = null
+            c.stroke = o.stroke?.let { lerpColor(it, Color.BLACK, shade) }; made.add(c)
+        }
+        doc.objs.addAll(at, made); changed()
     }
 
     /** Oblique (parallel-projection) extrude: stacked offset copies behind the object, shaded toward black. */

@@ -38,6 +38,7 @@ class VObj(var kind: Kind = Kind.PATH) {
     var meshR = 0; var meshC = 0
     var meshPos: FloatArray? = null   // optional per-vertex (u,v) relative to bounds; null = regular grid
     var meshH: FloatArray? = null     // per-vertex edge-handle offsets: 8 floats (left,right,up,down x u,v); null = straight edges
+    var fRot = 0f                     // rotation (deg) accumulated by transforms: mesh, gradient and patterns turn with the shape
     // transparency mask: 0 = none (uniform alpha only), 1 = fountain, 2 = bitmap pattern
     var tMode = 0; var tA1 = 1f; var tA2 = 0f; var tAngle = 0f
     var tPat = 0; var tTile = 10f           // built-in pattern index (-1 = custom image) and tile width in mm
@@ -114,6 +115,14 @@ class VObj(var kind: Kind = Kind.PATH) {
             val s = m.mapRadius(1f); size *= s; frameW *= s
         }
         if (kind == Kind.IMAGE) m.mapRect(rect)
+        if (kind == Kind.PATH) {
+            val v = FloatArray(9); m.getValues(v)
+            val det = v[Matrix.MSCALE_X] * v[Matrix.MSCALE_Y] - v[Matrix.MSKEW_X] * v[Matrix.MSKEW_Y]
+            if (det > 0f) {   // ignore reflections
+                val ang = Math.toDegrees(Math.atan2(v[Matrix.MSKEW_Y].toDouble(), v[Matrix.MSCALE_X].toDouble())).toFloat()
+                if (Math.abs(ang) > 1e-4f) fRot = (fRot + ang) % 360f
+            }
+        }
     }
 
     fun copy(): VObj = VObj(kind).also { o ->
@@ -124,7 +133,7 @@ class VObj(var kind: Kind = Kind.PATH) {
         o.text = text; o.size = size; o.bold = bold; o.italic = italic; o.align = align; o.spacing = spacing
         o.leading = leading; o.tx = tx; o.ty = ty; o.frameW = frameW; o.onPath = onPath
         o.bmp = bmp; o.rect = RectF(rect)
-        o.mesh = mesh?.copyOf(); o.meshR = meshR; o.meshC = meshC; o.meshPos = meshPos?.copyOf(); o.meshH = meshH?.copyOf()
+        o.mesh = mesh?.copyOf(); o.meshR = meshR; o.meshC = meshC; o.meshPos = meshPos?.copyOf(); o.meshH = meshH?.copyOf(); o.fRot = fRot
         o.tMode = tMode; o.tA1 = tA1; o.tA2 = tA2; o.tAngle = tAngle; o.tPat = tPat; o.tTile = tTile; o.tBmp = tBmp; o.tBaked = tBaked; o.tKey = tKey
     }
 
@@ -136,6 +145,7 @@ class VObj(var kind: Kind = Kind.PATH) {
         put("n", JSONArray().also { arr ->
             nodes.forEach { n -> arr.put(JSONArray(listOf(n.x, n.y, n.ix, n.iy, n.ox, n.oy, if (n.smooth) 1f else 0f).map { it.toDouble() })) }
         })
+        if (fRot != 0f) put("fr", fRot.toDouble())
         if (tMode != 0) {
             put("tm", tMode); put("ta1", tA1.toDouble()); put("ta2", tA2.toDouble()); put("tang", tAngle.toDouble()); put("tpat", tPat); put("ttile", tTile.toDouble())
             tBmp?.let { put("tbmp", Base64.encodeToString(Png.bytes(it), Base64.NO_WRAP)) }
@@ -170,6 +180,7 @@ class VObj(var kind: Kind = Kind.PATH) {
                 n.ix = a.getDouble(2).toFloat(); n.iy = a.getDouble(3).toFloat(); n.ox = a.getDouble(4).toFloat(); n.oy = a.getDouble(5).toFloat()
                 n.smooth = a.getDouble(6) > 0.5; o.nodes.add(n)
             }
+            o.fRot = j.optDouble("fr", 0.0).toFloat()
             o.tMode = j.optInt("tm")
             if (o.tMode != 0) {
                 o.tA1 = j.optDouble("ta1", 1.0).toFloat(); o.tA2 = j.optDouble("ta2", 0.0).toFloat(); o.tAngle = j.optDouble("tang", 0.0).toFloat()
