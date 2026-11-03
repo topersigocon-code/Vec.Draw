@@ -25,6 +25,7 @@ import androidx.core.view.doOnLayout
 import org.json.JSONObject
 import java.io.OutputStream
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -75,26 +76,61 @@ class AdaptiveScroll(ctx: Context, private val row: LinearLayout) : FrameLayout(
     }
 }
 
-/** A draggable panel: drag by its title bar; edges snap (dock) when released near them; ✕ hides it. */
+/**
+ * A draggable, resizable panel. Drag the title bar to move (edges snap when released near them), drag the ◢ grip to resize,
+ * tap the title for dock / size / hide options, ✕ hides it.
+ */
 class Dockable(ctx: Context, title: String, val content: View, closable: Boolean = true, onClose: () -> Unit = {}) : LinearLayout(ctx) {
     var onDropped: (Dockable) -> Unit = {}
+    var onHeaderTap: (Dockable) -> Unit = {}
+    var onResized: (Dockable) -> Unit = {}
+    private val bg = GradientDrawable().apply { setColor(PANEL); cornerRadius = ctx.dp(10).toFloat(); setStroke(1, 0x44FFFFFF) }
     init {
-        orientation = VERTICAL
-        background = GradientDrawable().apply { setColor(PANEL); cornerRadius = ctx.dp(10).toFloat(); setStroke(1, 0x44FFFFFF) }
+        orientation = VERTICAL; background = bg
         val head = LinearLayout(ctx).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(ctx.dp(10), ctx.dp(3), ctx.dp(6), ctx.dp(3)); setBackgroundColor(0x22FFFFFF) }
         head.addView(TextView(ctx).apply { text = "⠿  $title"; setTextColor(GOLD); textSize = 11f; setSingleLine(); ellipsize = TextUtils.TruncateAt.END }, LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        if (closable) head.addView(TextView(ctx).apply { text = "✕"; setTextColor(Color.WHITE); setPadding(ctx.dp(10), 0, ctx.dp(4), 0); setOnClickListener { visibility = GONE; onClose() } })
+        val grip = TextView(ctx).apply { text = "◢"; setTextColor(GOLD); textSize = 14f; setPadding(ctx.dp(12), ctx.dp(2), ctx.dp(8), ctx.dp(2)) }
+        head.addView(grip)
+        if (closable) head.addView(TextView(ctx).apply { text = "✕"; setTextColor(Color.WHITE); setPadding(ctx.dp(8), 0, ctx.dp(4), 0); setOnClickListener { visibility = GONE; onClose() } })
         addView(head); addView(content)
-        var dX = 0f; var dY = 0f
+        var dX = 0f; var dY = 0f; var downX = 0f; var downY = 0f
         head.setOnTouchListener { _, e ->
             when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { dX = x - e.rawX; dY = y - e.rawY; bringToFront() }
+                MotionEvent.ACTION_DOWN -> { dX = x - e.rawX; dY = y - e.rawY; downX = e.rawX; downY = e.rawY; bringToFront() }
                 MotionEvent.ACTION_MOVE -> { x = e.rawX + dX; y = e.rawY + dY }
-                MotionEvent.ACTION_UP -> { dock(); onDropped(this) }
+                MotionEvent.ACTION_UP -> {
+                    if (hypot(e.rawX - downX, e.rawY - downY) < ctx.dp(8)) { x = downX + dX; y = downY + dY; onHeaderTap(this) }
+                    else { dock(); onDropped(this) }
+                }
+            }
+            true
+        }
+        var sw = 0; var sh = 0; var gx = 0f; var gy = 0f
+        grip.setOnTouchListener { _, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { sw = width; sh = height; gx = e.rawX; gy = e.rawY; bringToFront() }
+                MotionEvent.ACTION_MOVE -> {
+                    val p = parent as? View
+                    val maxW = ((p?.width ?: 4000) - x).toInt(); val maxH = ((p?.height ?: 4000) - y).toInt()
+                    val nw = (sw + (e.rawX - gx)).toInt().coerceIn(ctx.dp(90), max(ctx.dp(90), maxW))
+                    val nh = (sh + (e.rawY - gy)).toInt().coerceIn(ctx.dp(70), max(ctx.dp(70), maxH))
+                    (layoutParams as? FrameLayout.LayoutParams)?.let { lp -> lp.width = nw; lp.height = nh; layoutParams = lp }
+                    fit(nw, nh)
+                }
+                MotionEvent.ACTION_UP -> onResized(this)
             }
             true
         }
     }
+
+    /** Make the content follow an explicit panel size (w/h > 0) or wrap around itself. */
+    fun fit(w: Int, h: Int) {
+        val ww = if (w > 0) ViewGroup.LayoutParams.MATCH_PARENT else ViewGroup.LayoutParams.WRAP_CONTENT
+        content.layoutParams = if (h > 0) LayoutParams(ww, 0, 1f) else LayoutParams(ww, ViewGroup.LayoutParams.WRAP_CONTENT)
+    }
+
+    fun setPanelAlpha(a: Float) { bg.setColor((((a.coerceIn(0.2f, 1f) * 255).toInt()) shl 24) or 0x1F2329) }
+
     fun dock() {
         val p = parent as? View ?: return; val m = context.dp(40).toFloat()
         if (x < m) x = 0f; if (x + width > p.width - m) x = (p.width - width).toFloat().coerceAtLeast(0f)
@@ -110,6 +146,8 @@ class MainActivity : AppCompatActivity() {
     private val refreshers = mutableListOf<() -> Unit>()
     private var pendingWrite: ((OutputStream) -> Unit)? = null
     private var palMode = 0
+    private var panelAlpha = 0.93f; private var iconDp = 30; private var appliedIcon = 0
+    private var iconSizeApplier: (Int) -> Unit = {}
     private var panelsHidden = false
     private val hiddenBefore = mutableSetOf<String>()
 
@@ -138,6 +176,7 @@ class MainActivity : AppCompatActivity() {
         addPanel("Status", statusBar(), true)
         addPanel("Quick", quickBar(), false)
         cv.onStatus = { statusTv.text = it }
+        applyPanelPrefs()
         root.doOnLayout { cv.fit(); layoutPanels(); refreshers.forEach { it() } }
     }
 
@@ -183,6 +222,9 @@ class MainActivity : AppCompatActivity() {
             .putBoolean("showGrid", cv.showGrid).putBoolean("lockRatio", cv.lockRatio)
             .putInt("meshRows", cv.meshRows).putInt("meshCols", cv.meshCols).putInt("polySides", cv.polySides).putInt("starPts", cv.starPts)
             .putInt("palMode", palMode).putString("tool", cv.tool.name)
+            .putInt("bg", cv.bgColor).putInt("gridc", cv.gridColor).putInt("gridA", cv.gridAlpha).putInt("guidec", cv.guideColor).putInt("selc", cv.selColor)
+            .putFloat("snapR", cv.snapRadius).putBoolean("snapN", cv.snapNodes).putBoolean("snapC", cv.snapCenters).putBoolean("snapE", cv.snapEdges)
+            .putFloat("fhEps", cv.freehandEps).putInt("undoN", cv.undoLimit).putFloat("pAlpha", panelAlpha).putInt("iconDp", iconDp)
             .putString("st_fill", colStr(st.fill)).putString("st_fill2", colStr(st.fill2)).putString("st_stroke", colStr(st.stroke))
             .putFloat("st_sw", st.strokeW).putInt("st_cap", st.cap).putInt("st_join", st.join).putInt("st_dash", st.dash)
             .putBoolean("st_arrow", st.arrow).putFloat("st_alpha", st.alpha).putBoolean("st_shadow", st.shadow)
@@ -204,6 +246,13 @@ class MainActivity : AppCompatActivity() {
         cv.meshRows = sp.getInt("meshRows", 3).coerceIn(2, 8); cv.meshCols = sp.getInt("meshCols", 3).coerceIn(2, 8)
         cv.polySides = sp.getInt("polySides", 6).coerceIn(3, 30); cv.starPts = sp.getInt("starPts", 5).coerceIn(3, 30)
         palMode = sp.getInt("palMode", 0).coerceIn(0, 3)
+        cv.bgColor = sp.getInt("bg", cv.bgColor); cv.gridColor = sp.getInt("gridc", cv.gridColor); cv.gridAlpha = sp.getInt("gridA", cv.gridAlpha).coerceIn(5, 100)
+        cv.guideColor = sp.getInt("guidec", cv.guideColor); cv.selColor = sp.getInt("selc", cv.selColor)
+        cv.snapRadius = sp.getFloat("snapR", cv.snapRadius).coerceIn(4f, 30f); cv.snapNodes = sp.getBoolean("snapN", true)
+        cv.snapCenters = sp.getBoolean("snapC", false); cv.snapEdges = sp.getBoolean("snapE", false)
+        cv.freehandEps = sp.getFloat("fhEps", cv.freehandEps).coerceIn(1f, 10f); cv.undoLimit = sp.getInt("undoN", cv.undoLimit).coerceIn(10, 200)
+        panelAlpha = sp.getFloat("pAlpha", panelAlpha).coerceIn(0.3f, 1f); iconDp = sp.getInt("iconDp", iconDp).coerceIn(24, 44)
+        cv.applyTheme()
         st.fill = col("st_fill", st.fill); st.fill2 = col("st_fill2", null); st.stroke = col("st_stroke", st.stroke)
         st.strokeW = sp.getFloat("st_sw", st.strokeW); st.cap = sp.getInt("st_cap", 0).coerceIn(0, 2); st.join = sp.getInt("st_join", 0).coerceIn(0, 2)
         st.dash = sp.getInt("st_dash", 0).coerceIn(0, 3); st.arrow = sp.getBoolean("st_arrow", false)
@@ -214,26 +263,46 @@ class MainActivity : AppCompatActivity() {
     override fun onConfigurationChanged(newConfig: Configuration) { super.onConfigurationChanged(newConfig); root.postDelayed({ layoutPanels() }, 250) }
 
     private fun addPanel(name: String, content: View, closable: Boolean) {
-        val d = Dockable(this, name, content, closable) { root.post { reflow() } }; d.onDropped = { onDropped(it) }; panels[name] = d
+        val d = Dockable(this, name, content, closable) { root.post { reflow() } }
+        d.onDropped = { onDropped(it) }; d.onHeaderTap = { panelMenuFor(it) }
+        d.onResized = { p -> p.dock(); bump(p, panels.values); reflow() }
+        panels[name] = d
         root.addView(d, FrameLayout.LayoutParams(-2, -2))
     }
 
-    private fun setSize(n: String, w: Int, h: Int) { panels[n]?.let { p -> p.layoutParams = (p.layoutParams as FrameLayout.LayoutParams).also { it.width = w; it.height = h } } }
+    private fun nameOf(d: Dockable) = panels.entries.firstOrNull { it.value === d }?.key ?: ""
 
-    /** Default arrangement: Properties top, Status bottom, Toolbox left, Palette right (vertical) - all docked, so the canvas shrinks to fit. */
+    private fun setSize(n: String, w: Int, h: Int) {
+        panels[n]?.let { p -> p.layoutParams = (p.layoutParams as FrameLayout.LayoutParams).also { it.width = w; it.height = h }; p.fit(w, h) }
+    }
+
+    private fun toolboxW() = dp(2 * (iconDp + 16 + 4) + 12)
+
+    private fun defSize(n: String, w: Int, h: Int): Pair<Int, Int> = when (n) {
+        "Properties", "Status" -> w to ViewGroup.LayoutParams.WRAP_CONTENT
+        "Palette" -> dp(60) to (h * 0.7f).toInt()
+        "Toolbox" -> toolboxW() to (h * 0.55f).toInt()
+        "Objects" -> dp(230) to (h * 0.5f).toInt()
+        else -> ViewGroup.LayoutParams.WRAP_CONTENT to ViewGroup.LayoutParams.WRAP_CONTENT
+    }
+
+    /** Default arrangement: Properties top, Status bottom, Toolbox left, Palette right (vertical) - docked, so the canvas shrinks; nothing overlaps. */
     private fun layoutPanels(reset: Boolean = false) {
-        val w = root.width; val h = root.height; val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
+        val w = root.width; val h = root.height
         val sp = getSharedPreferences("vd", MODE_PRIVATE)
         // restore the saved arrangement if the screen size is unchanged
         if (!reset && sp.contains("p_Toolbox_x") && abs(sp.getInt("ref_w", 0) - w) <= 2 && abs(sp.getInt("ref_h", 0) - h) <= 2) {
             for ((n, p) in panels) {
                 (p.content as? AdaptiveScroll)?.setVertical(sp.getBoolean("p_${n}_vert", false))
-                setSize(n, sp.getInt("p_${n}_w", wrap), sp.getInt("p_${n}_h", wrap))
+                val d = defSize(n, w, h)
+                var sw = sp.getInt("p_${n}_w", d.first); var sh = sp.getInt("p_${n}_h", d.second)
+                if ((n == "Toolbox" || n == "Objects") && (sw <= 0 || sh <= 0)) { sw = d.first; sh = d.second }
+                setSize(n, sw, sh)
                 p.visibility = if (n == "Quick" || sp.getBoolean("p_${n}_vis", true)) View.VISIBLE else View.GONE
             }
             root.postDelayed({
                 for ((n, p) in panels) { p.x = sp.getFloat("p_${n}_x", 0f) * w; p.y = sp.getFloat("p_${n}_y", 0f) * h }
-                reflow(); cv.postDelayed({ cv.fit() }, 80)
+                resolveAll(); reflow(); cv.postDelayed({ cv.fit() }, 80)
             }, 100)
             return
         }
@@ -242,7 +311,7 @@ class MainActivity : AppCompatActivity() {
         (panels["Palette"]?.content as? AdaptiveScroll)?.setVertical(true)
         (panels["Properties"]?.content as? AdaptiveScroll)?.setVertical(false)
         (panels["Status"]?.content as? AdaptiveScroll)?.setVertical(false)
-        setSize("Properties", w, wrap); setSize("Status", w, wrap); setSize("Palette", dp(60), (h * 0.7f).toInt())
+        for (n in panels.keys) { val d = defSize(n, w, h); setSize(n, d.first, d.second) }
         root.postDelayed({
             val top = panels["Properties"]?.height ?: 0; val gap = dp(6)
             panels["Properties"]?.let { it.x = 0f; it.y = 0f }
@@ -251,7 +320,7 @@ class MainActivity : AppCompatActivity() {
             panels["Palette"]?.let { it.x = (w - it.width).toFloat(); it.y = (top + gap).toFloat() }
             panels["Quick"]?.let { it.x = (w - it.width - dp(70)).toFloat(); it.y = (top + gap).toFloat() }
             panels["Objects"]?.let { it.x = (w - it.width - dp(70)).toFloat(); it.y = (top + gap + dp(50)).toFloat() }
-            reflow(); cv.postDelayed({ cv.fit() }, 80)
+            resolveAll(); reflow(); cv.postDelayed({ cv.fit() }, 80)
         }, 100)
     }
 
@@ -281,21 +350,161 @@ class MainActivity : AppCompatActivity() {
         lp.setMargins(l, t, r, b); cv.layoutParams = lp; cv.invalidate()
     }
 
-    /** After a drop: flip adaptive panels (Properties / Palette / Status) between strip and column to suit the edge, then reflow. */
+    private fun rectOf(p: Dockable) = RectF(p.x, p.y, p.x + p.width, p.y + p.height)
+    private fun overlap(a: RectF, b: RectF) = a.left < b.right - 1f && a.right > b.left + 1f && a.top < b.bottom - 1f && a.bottom > b.top + 1f
+
+    /** Snap a panel flush against neighbouring panels (and align edges) when released close to them. */
+    private fun magnet(d: Dockable) {
+        val t = dp(14).toFloat(); val r = rectOf(d)
+        for (q in panels.values) {
+            if (q === d || q.visibility != View.VISIBLE) continue
+            val o = rectOf(q); val vOver = r.top < o.bottom && r.bottom > o.top; val hOver = r.left < o.right && r.right > o.left
+            if (vOver && abs(r.left - o.right) < t) d.x = o.right
+            else if (vOver && abs(r.right - o.left) < t) d.x = o.left - d.width
+            else if (abs(r.left - o.left) < t && !vOver) d.x = o.left
+            if (hOver && abs(r.top - o.bottom) < t) d.y = o.bottom
+            else if (hOver && abs(r.bottom - o.top) < t) d.y = o.top - d.height
+            else if (abs(r.top - o.top) < t && !hOver) d.y = o.top
+        }
+    }
+
+    /** If the panel overlaps another visible panel, move it to the nearest free spot (flush beside a neighbour, or anywhere free). */
+    private fun bump(p: Dockable, all: Collection<Dockable>) {
+        val others = all.filter { it !== p && it.visibility == View.VISIBLE }
+        val w = p.width.toFloat(); val h = p.height.toFloat(); val sw = root.width.toFloat(); val sh = root.height.toFloat()
+        if (w <= 0f || others.none { overlap(rectOf(p), rectOf(it)) }) return
+        var bestX = p.x; var bestY = p.y; var bestD = Float.MAX_VALUE
+        fun consider(x0: Float, y0: Float) {
+            val x = x0.coerceIn(0f, max(0f, sw - w)); val y = y0.coerceIn(0f, max(0f, sh - h)); val r = RectF(x, y, x + w, y + h)
+            if (others.none { overlap(r, rectOf(it)) }) { val d = hypot(x - p.x, y - p.y); if (d < bestD) { bestD = d; bestX = x; bestY = y } }
+        }
+        for (q in others) { val o = rectOf(q); consider(o.right, p.y); consider(o.left - w, p.y); consider(p.x, o.bottom); consider(p.x, o.top - h) }
+        if (bestD == Float.MAX_VALUE) {
+            val step = dp(16).toFloat(); var yy = 0f
+            while (yy <= sh - h) { var xx = 0f; while (xx <= sw - w) { consider(xx, yy); xx += step }; yy += step }
+        }
+        if (bestD != Float.MAX_VALUE) { p.x = bestX; p.y = bestY }
+    }
+
+    /** Later panels in this priority order are moved out of the way of earlier ones. */
+    private fun resolveAll() {
+        val order = listOf("Properties", "Status", "Toolbox", "Palette", "Quick", "Objects").mapNotNull { panels[it] }
+        for (i in 1 until order.size) bump(order[i], order.subList(0, i))
+    }
+
+    /** After a drop: flip adaptive panels (Properties / Palette / Status) between strip and column to suit the edge, then tidy up. */
     private fun onDropped(d: Dockable) {
         val w = root.width; val h = root.height; val tol = 3f; val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
         val fl = d.x <= tol; val fr = d.x + d.width >= w - tol; val ft = d.y <= tol; val fb = d.y + d.height >= h - tol
-        val name = panels.entries.firstOrNull { it.value === d }?.key ?: ""
-        val ad = d.content as? AdaptiveScroll
+        val name = nameOf(d); val ad = d.content as? AdaptiveScroll
         val finish = {
             if (fl) d.x = 0f; if (fr) d.x = (w - d.width).toFloat(); if (ft) d.y = 0f; if (fb) d.y = (h - d.height).toFloat()
-            d.dock(); reflow()
+            d.dock(); magnet(d); bump(d, panels.values); reflow()
         }
         if (ad != null && (fl || fr) && !ft && !fb) {
             ad.setVertical(true); setSize(name, dp(if (name == "Properties") 150 else 60), (h * 0.7f).toInt()); d.postDelayed({ finish() }, 80)
         } else if (ad != null && (ft || fb) && !fl && !fr) {
             ad.setVertical(false); setSize(name, w, wrap); d.postDelayed({ finish() }, 80)
         } else finish()
+    }
+
+    /** side: 1 left, 2 right, 3 top, 4 bottom. */
+    private fun dockTo(d: Dockable, side: Int) {
+        val w = root.width; val h = root.height; val name = nameOf(d); val ad = d.content as? AdaptiveScroll; val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
+        if (ad != null && (side == 1 || side == 2)) { ad.setVertical(true); setSize(name, dp(if (name == "Properties") 150 else 60), (h * 0.7f).toInt()) }
+        if (ad != null && (side == 3 || side == 4)) { ad.setVertical(false); setSize(name, w, wrap) }
+        d.postDelayed({
+            when (side) { 1 -> d.x = 0f; 2 -> d.x = (w - d.width).toFloat(); 3 -> d.y = 0f; 4 -> d.y = (h - d.height).toFloat() }
+            if (ad != null && (side == 3 || side == 4)) d.x = 0f
+            if (side == 1 || side == 2) d.y = d.y.coerceIn(0f, (h - d.height).toFloat().coerceAtLeast(0f))
+            if (side == 3 || side == 4) d.x = d.x.coerceIn(0f, (w - d.width).toFloat().coerceAtLeast(0f))
+            bump(d, panels.values); reflow()
+        }, 80)
+    }
+
+    private fun resizeBy(d: Dockable, f: Float) {
+        val nw = (d.width * f).toInt().coerceIn(dp(90), root.width); val nh = (d.height * f).toInt().coerceIn(dp(70), root.height)
+        setSize(nameOf(d), nw, nh)
+        d.postDelayed({
+            d.x = d.x.coerceIn(0f, max(0f, (root.width - d.width).toFloat())); d.y = d.y.coerceIn(0f, max(0f, (root.height - d.height).toFloat()))
+            bump(d, panels.values); reflow()
+        }, 80)
+    }
+
+    private fun panelMenuFor(d: Dockable) {
+        val name = nameOf(d)
+        val items = mutableListOf<Pair<String, () -> Unit>>(
+            "Dock left" to { dockTo(d, 1) }, "Dock right" to { dockTo(d, 2) }, "Dock top" to { dockTo(d, 3) }, "Dock bottom" to { dockTo(d, 4) },
+            "Bigger" to { resizeBy(d, 1.25f) }, "Smaller" to { resizeBy(d, 0.8f) })
+        if (name != "Quick") items.add("Hide panel" to { d.visibility = View.GONE; root.post { reflow() } })
+        menu("$name panel", items)
+    }
+
+    private fun applyPanelPrefs() { panels.values.forEach { it.setPanelAlpha(panelAlpha) }; iconSizeApplier(iconDp); appliedIcon = iconDp }
+
+    /** Apply the live values from the Settings dialog. */
+    private fun applySettings() {
+        cv.applyTheme(); panels.values.forEach { it.setPanelAlpha(panelAlpha) }
+        if (iconDp != appliedIcon) {
+            appliedIcon = iconDp; iconSizeApplier(iconDp)
+            setSize("Toolbox", toolboxW(), panels["Toolbox"]?.layoutParams?.height ?: ViewGroup.LayoutParams.WRAP_CONTENT)
+            root.postDelayed({ panels["Toolbox"]?.let { bump(it, panels.values) }; reflow() }, 100)
+        }
+    }
+
+    private fun resetSettings() {
+        cv.bgColor = 0xFF1B1D21.toInt(); cv.gridColor = Color.BLACK; cv.gridAlpha = 15; cv.guideColor = 0xFF00BCD4.toInt(); cv.selColor = GOLD
+        cv.snapRadius = 10f; cv.snapNodes = true; cv.snapCenters = false; cv.snapEdges = false; cv.freehandEps = 2f; cv.undoLimit = 60
+        panelAlpha = 0.93f; iconDp = 30; applySettings()
+    }
+
+    private fun settingsDialog() {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(8), dp(18), dp(8)) }
+        fun head(t: String) = col.addView(TextView(this).apply { text = t; setTextColor(GOLD); textSize = 13f; setPadding(0, dp(14), 0, dp(4)) })
+        fun colorRow(name: String, get: () -> Int, set: (Int) -> Unit) {
+            val sw = View(this); setSwatch(sw, get() or (0xFF shl 24))
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            row.addView(TextView(this).apply { text = name }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            sw.setOnClickListener { pickColor(get() or (0xFF shl 24)) { c -> set(c); setSwatch(sw, c); applySettings() } }
+            row.addView(sw, LinearLayout.LayoutParams(dp(44), dp(30))); col.addView(row)
+        }
+        fun slider(name: String, lo: Int, hi: Int, get: () -> Int, set: (Int) -> Unit, unit: String) {
+            val tv = TextView(this).apply { text = "$name: ${get()}$unit" }
+            val sb = SeekBar(this)
+            sb.max = hi - lo; sb.progress = (get() - lo).coerceIn(0, hi - lo)
+            sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar, p: Int, u: Boolean) { set(p + lo); tv.text = "$name: ${p + lo}$unit"; if (u) applySettings() }
+                override fun onStartTrackingTouch(s: SeekBar) {}
+                override fun onStopTrackingTouch(s: SeekBar) {}
+            })
+            col.addView(tv); col.addView(sb)
+        }
+        fun check(name: String, get: () -> Boolean, set: (Boolean) -> Unit) {
+            col.addView(CheckBox(this).apply { text = name; isChecked = get(); setOnCheckedChangeListener { _, v -> set(v); applySettings() } })
+        }
+        head("Canvas")
+        colorRow("Background", { cv.bgColor }, { cv.bgColor = it })
+        colorRow("Grid", { cv.gridColor }, { cv.gridColor = it })
+        colorRow("Guides", { cv.guideColor }, { cv.guideColor = it })
+        colorRow("Selection & handles", { cv.selColor }, { cv.selColor = it })
+        slider("Grid opacity", 5, 100, { cv.gridAlpha }, { cv.gridAlpha = it }, "%")
+        head("Panels")
+        slider("Panel opacity", 30, 100, { (panelAlpha * 100).toInt() }, { panelAlpha = it / 100f }, "%")
+        slider("Tool icon size", 24, 44, { iconDp }, { iconDp = it }, " dp")
+        head("Snapping")
+        slider("Snap radius", 4, 30, { cv.snapRadius.toInt() }, { cv.snapRadius = it.toFloat() }, " px")
+        check("To object nodes", { cv.snapNodes }, { cv.snapNodes = it })
+        check("To object centres", { cv.snapCenters }, { cv.snapCenters = it })
+        check("To object edges & corners", { cv.snapEdges }, { cv.snapEdges = it })
+        col.addView(TextView(this).apply { text = "Object snapping is switched on with “Objects” in the status bar."; textSize = 11f })
+        head("Drawing")
+        slider("Freehand smoothing", 1, 10, { cv.freehandEps.toInt() }, { cv.freehandEps = it.toFloat() }, " px")
+        slider("Undo steps", 10, 200, { cv.undoLimit }, { cv.undoLimit = it }, "")
+        lateinit var dlg: AlertDialog
+        col.addView(Button(this).apply { text = "Reset to defaults"; setOnClickListener { resetSettings(); dlg.dismiss(); settingsDialog() } })
+        dlg = AlertDialog.Builder(this).setTitle("Settings").setView(ScrollView(this).apply { addView(col) }).setPositiveButton("Done", null)
+            .setOnDismissListener { saveUi() }.create()
+        dlg.show()
     }
 
     // ---------- small UI helpers ----------
@@ -352,7 +561,14 @@ class MainActivity : AppCompatActivity() {
                 (c.background as GradientDrawable).setColor(if (on) GOLD else 0x22FFFFFF); c.getChildAt(0).invalidate()
             }
         }
-        return ScrollView(this).apply { addView(grid); layoutParams = LinearLayout.LayoutParams(dp(112), (resources.displayMetrics.heightPixels * 0.55f).toInt()) }
+        iconSizeApplier = { sz ->
+            for (cell in icons.values) {
+                (cell.layoutParams as GridLayout.LayoutParams).let { it.width = dp(sz + 16); it.height = dp(sz + 16) }
+                (cell.getChildAt(0).layoutParams as FrameLayout.LayoutParams).let { it.width = dp(sz); it.height = dp(sz) }
+                cell.requestLayout()
+            }
+        }
+        return ScrollView(this).apply { addView(grid) }
     }
 
     private fun toolOptions(t: Tool) {
@@ -505,7 +721,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        return ScrollView(this).apply { addView(col); layoutParams = LinearLayout.LayoutParams(dp(230), (resources.displayMetrics.heightPixels * 0.5f).toInt()) }
+        return ScrollView(this).apply { addView(col) }
     }
 
     // ---------- Status bar with snapping toggles ----------
@@ -533,18 +749,18 @@ class MainActivity : AppCompatActivity() {
     private fun togglePanels() {
         if (!panelsHidden) { hiddenBefore.clear(); panels.forEach { (n, p) -> if (n != "Quick") { if (p.visibility == View.GONE) hiddenBefore.add(n) else p.visibility = View.GONE } } }
         else panels.forEach { (n, p) -> if (n != "Quick" && n !in hiddenBefore) p.visibility = View.VISIBLE }
-        panelsHidden = !panelsHidden; root.post { reflow() }
+        panelsHidden = !panelsHidden; root.post { resolveAll(); reflow() }
     }
 
     private fun panelMenu() {
         val names = panels.keys.filter { it != "Quick" }.toTypedArray(); val checked = BooleanArray(names.size) { panels[names[it]]!!.visibility == View.VISIBLE }
-        AlertDialog.Builder(this).setTitle("Show / hide panels").setMultiChoiceItems(names, checked) { _, i, on -> panels[names[i]]!!.apply { visibility = if (on) View.VISIBLE else View.GONE; if (on) { bringToFront(); dock() } } }.setPositiveButton("Done", null).setOnDismissListener { root.post { reflow() } }.show()
+        AlertDialog.Builder(this).setTitle("Show / hide panels").setMultiChoiceItems(names, checked) { _, i, on -> panels[names[i]]!!.apply { visibility = if (on) View.VISIBLE else View.GONE; if (on) { bringToFront(); dock() } } }.setPositiveButton("Done", null).setOnDismissListener { root.post { resolveAll(); reflow() } }.show()
     }
 
     // ---------- Menus ----------
     private fun mainMenu() = menu("VecDraw by Topz", listOf(
         "File" to { fileMenu() }, "Edit" to { editMenu() }, "Arrange / Transform" to { arrangeMenu() },
-        "Effects" to { effectsMenu() }, "Page & Grid" to { pageMenu() }, "Panels" to { panelMenu() }, "Reset panel layout" to { layoutPanels(true) }))
+        "Effects" to { effectsMenu() }, "Page & Grid" to { pageMenu() }, "Panels" to { panelMenu() }, "Settings…" to { settingsDialog() }, "Reset panel layout" to { layoutPanels(true) }))
 
     private fun fileMenu() = menu("File", listOf(
         "New" to { newDrawing() },

@@ -54,6 +54,11 @@ class VecCanvas(ctx: Context) : View(ctx) {
     var activeLayer = 0
     var snapGrid = true; var snapGuides = true; var snapObjs = false; var showGrid = true
     var lockRatio = true
+    // customisable settings (see the Settings dialog)
+    var bgColor = 0xFF1B1D21.toInt(); var gridColor = Color.BLACK; var gridAlpha = 15
+    var guideColor = 0xFF00BCD4.toInt(); var selColor = 0xFFE5A93C.toInt()
+    var snapRadius = 10f; var snapNodes = true; var snapCenters = false; var snapEdges = false
+    var freehandEps = 2f; var undoLimit = 60
     var meshRows = 3; var meshCols = 3; private var meshV = -1
     private var meshHdir = -1
     var polySides = 6; var starPts = 5; var basicIdx = 0
@@ -106,10 +111,16 @@ class VecCanvas(ctx: Context) : View(ctx) {
         onStatus(extra + "  ${tool.label}  ${(scale / 3.7795f * 100).roundToInt()}%  ${doc.unit}")
     }
 
+    fun applyTheme() {
+        gridPaint.color = ((gridAlpha.coerceIn(0, 100) * 255 / 100) shl 24) or (gridColor and 0xFFFFFF)
+        guidePaint.color = guideColor; selP.color = selColor; hGold.color = selColor; hStroke.color = selColor
+        invalidate()
+    }
+
     fun changed() { invalidate(); onChange() }
 
     // ---------- history ----------
-    fun checkpoint() { uStack.addLast(doc.objs.map { it.copy() }); if (uStack.size > 60) uStack.removeFirst(); rStack.clear() }
+    fun checkpoint() { uStack.addLast(doc.objs.map { it.copy() }); while (uStack.size > undoLimit) uStack.removeFirst(); rStack.clear() }
     private fun ensureCk() { if (!gCk) { checkpoint(); gCk = true } }
     fun undo() { if (uStack.isEmpty()) return; rStack.addLast(doc.objs.map { it.copy() }); doc.objs = uStack.removeLast().toMutableList(); sel.clear(); selNode = -1; envQ = null; changed() }
     fun redo() { if (rStack.isEmpty()) return; uStack.addLast(doc.objs.map { it.copy() }); doc.objs = rStack.removeLast().toMutableList(); sel.clear(); selNode = -1; envQ = null; changed() }
@@ -126,10 +137,23 @@ class VecCanvas(ctx: Context) : View(ctx) {
 
     // ---------- snapping ----------
     fun snapPt(x: Float, y: Float): PointF {
-        val tol = 10f / scale
-        if (snapObjs) for (o in doc.objs) {
-            if (o in sel || o.kind != Kind.PATH) continue
-            for (n in o.nodes) if (hypot(n.x - x, n.y - y) < tol) return PointF(n.x, n.y)
+        val tol = snapRadius / scale
+        if (snapObjs) {
+            var best: PointF? = null; var bd = tol
+            fun consider(px: Float, py: Float) { val d = hypot(px - x, py - y); if (d < bd) { bd = d; best = PointF(px, py) } }
+            for (o in doc.objs) {
+                if (o in sel || !o.visible) continue
+                if (snapNodes && o.kind == Kind.PATH) for (n in o.nodes) consider(n.x, n.y)
+                if (snapCenters || snapEdges) {
+                    val bb = o.bounds()
+                    if (snapCenters) consider(bb.centerX(), bb.centerY())
+                    if (snapEdges) {
+                        consider(bb.left, bb.top); consider(bb.right, bb.top); consider(bb.right, bb.bottom); consider(bb.left, bb.bottom)
+                        consider(bb.centerX(), bb.top); consider(bb.centerX(), bb.bottom); consider(bb.left, bb.centerY()); consider(bb.right, bb.centerY())
+                    }
+                }
+            }
+            val hit = best; if (hit != null) return hit
         }
         var px = x; var py = y; var gx = false; var gy = false
         if (snapGuides) {
@@ -160,7 +184,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
 
     // ---------- drawing ----------
     override fun onDraw(c: Canvas) {
-        c.drawColor(0xFF1B1D21.toInt())
+        c.drawColor(bgColor)
         c.save(); c.translate(panX, panY); c.scale(scale, scale)
         c.drawRect(1.5f, 1.5f, doc.w + 1.5f, doc.h + 1.5f, shadowPaint)
         c.drawRect(0f, 0f, doc.w, doc.h, pagePaint)
@@ -494,7 +518,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     private fun finishFreehand() {
         if (fh.size < 3) return
         if (tool == Tool.SMART) recognize(fh)?.let { commitNew(it); return }
-        val pts = Geo.rdp(fh, 2f / scale); if (pts.size < 2) return
+        val pts = Geo.rdp(fh, freehandEps / scale); if (pts.size < 2) return
         val o = newObj(); o.closed = false; o.fill = null; o.nodes = Geo.smooth(pts, false); commitNew(o)
     }
 
@@ -507,7 +531,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
         if (hypot(a.x - z.x, a.y - z.y) > 0.2f * diag) {
             val dev = pts.maxOf { Geo.segDist(it.x, it.y, a, z) }
             o.closed = false; o.fill = null
-            o.nodes = if (dev < 0.05f * hypot(z.x - a.x, z.y - a.y)) mutableListOf(Node(a.x, a.y), Node(z.x, z.y)) else Geo.smooth(Geo.rdp(pts, 2f / scale), false)
+            o.nodes = if (dev < 0.05f * hypot(z.x - a.x, z.y - a.y)) mutableListOf(Node(a.x, a.y), Node(z.x, z.y)) else Geo.smooth(Geo.rdp(pts, freehandEps / scale), false)
             return o
         }
         val ccx = (l + r) / 2; val ccy = (t + b) / 2
@@ -517,7 +541,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
             val rectErr = pts.map { minOf(abs(it.x - l), abs(it.x - r), abs(it.y - t), abs(it.y - b)) }.average()
             if (rectErr < 0.04 * diag) { o.closed = true; o.nodes = Geo.rect(l, t, r, b); return o }
         }
-        o.closed = true; o.nodes = Geo.smooth(Geo.rdp(pts, 2f / scale), true); return o
+        o.closed = true; o.nodes = Geo.smooth(Geo.rdp(pts, freehandEps / scale), true); return o
     }
 
     // ---------- Shapes ----------
