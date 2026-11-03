@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.graphics.*
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.content.res.Configuration
 import android.net.Uri
@@ -78,21 +79,33 @@ class AdaptiveScroll(ctx: Context, private val row: LinearLayout) : FrameLayout(
 
 /**
  * A draggable, resizable panel. Drag the title bar to move (edges snap when released near them), drag the ◢ grip to resize,
- * tap the title for dock / size / hide options, ✕ hides it.
+ * tap the title for dock / size options (or to expand it again when collapsed), ▾ opens a flyout showing everything in the panel,
+ * — collapses the panel down to its title bar (the title always stays visible).
  */
-class Dockable(ctx: Context, title: String, val content: View, closable: Boolean = true, onClose: () -> Unit = {}) : LinearLayout(ctx) {
+class Dockable(ctx: Context, val title: String, val content: View, closable: Boolean = true) : LinearLayout(ctx) {
     var onDropped: (Dockable) -> Unit = {}
     var onHeaderTap: (Dockable) -> Unit = {}
     var onResized: (Dockable) -> Unit = {}
+    var onFlyout: (Dockable, View) -> Unit = { _, _ -> }
+    var onMinimize: (Dockable) -> Unit = {}
+    var collapsed = false; private set
+    var expW = ViewGroup.LayoutParams.WRAP_CONTENT; var expH = ViewGroup.LayoutParams.WRAP_CONTENT   // size / position to return to
+    var expX = 0f; var expY = 0f; var anchorR = false; var anchorB = false
     private val bg = GradientDrawable().apply { setColor(PANEL); cornerRadius = ctx.dp(10).toFloat(); setStroke(1, 0x44FFFFFF) }
+    private val titleTv = TextView(ctx).apply { text = "⠿  $title"; setTextColor(GOLD); textSize = 11f; setSingleLine(); ellipsize = TextUtils.TruncateAt.END }
+    private val flyBtn = TextView(ctx).apply { text = "▾"; setTextColor(GOLD); textSize = 15f; setPadding(ctx.dp(10), ctx.dp(1), ctx.dp(8), ctx.dp(1)) }
+    private val grip = TextView(ctx).apply { text = "◢"; setTextColor(GOLD); textSize = 14f; setPadding(ctx.dp(8), ctx.dp(2), ctx.dp(8), ctx.dp(2)) }
+    private val minBtn: TextView? = if (closable) TextView(ctx).apply { text = "—"; setTextColor(Color.WHITE); textSize = 14f; setPadding(ctx.dp(8), 0, ctx.dp(4), 0) } else null
+    private var lent = false; private var lentLp: ViewGroup.LayoutParams? = null; private var lentVert = false
+
     init {
         orientation = VERTICAL; background = bg
         val head = LinearLayout(ctx).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(ctx.dp(10), ctx.dp(3), ctx.dp(6), ctx.dp(3)); setBackgroundColor(0x22FFFFFF) }
-        head.addView(TextView(ctx).apply { text = "⠿  $title"; setTextColor(GOLD); textSize = 11f; setSingleLine(); ellipsize = TextUtils.TruncateAt.END }, LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val grip = TextView(ctx).apply { text = "◢"; setTextColor(GOLD); textSize = 14f; setPadding(ctx.dp(12), ctx.dp(2), ctx.dp(8), ctx.dp(2)) }
-        head.addView(grip)
-        if (closable) head.addView(TextView(ctx).apply { text = "✕"; setTextColor(Color.WHITE); setPadding(ctx.dp(8), 0, ctx.dp(4), 0); setOnClickListener { visibility = GONE; onClose() } })
+        head.addView(titleTv, LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        head.addView(flyBtn); head.addView(grip); minBtn?.let { head.addView(it) }
         addView(head); addView(content)
+        flyBtn.setOnClickListener { onFlyout(this@Dockable, it) }
+        minBtn?.setOnClickListener { onMinimize(this@Dockable) }
         var dX = 0f; var dY = 0f; var downX = 0f; var downY = 0f
         head.setOnTouchListener { _, e ->
             when (e.actionMasked) {
@@ -123,6 +136,21 @@ class Dockable(ctx: Context, title: String, val content: View, closable: Boolean
         }
     }
 
+    /** Narrow column panels drop the grip and minimise button (use the title menu instead) so the title and ▾ always fit. */
+    override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
+        super.onSizeChanged(w, h, ow, oh)
+        if (!collapsed) { val wide = w >= context.dp(110); grip.visibility = if (wide) View.VISIBLE else View.GONE; minBtn?.visibility = if (wide) View.VISIBLE else View.GONE }
+    }
+
+    /** Collapse to the title bar only (the title stays visible and tapping it brings the panel back) or expand again. */
+    fun collapseTo(c: Boolean) {
+        collapsed = c; content.visibility = if (c) View.GONE else View.VISIBLE
+        titleTv.text = (if (c) "▸  " else "⠿  ") + title
+        flyBtn.visibility = if (c) View.GONE else View.VISIBLE
+        if (c) { grip.visibility = View.GONE; minBtn?.visibility = View.GONE }
+        else { val wide = width == 0 || width >= context.dp(110); grip.visibility = if (wide) View.VISIBLE else View.GONE; minBtn?.visibility = if (wide) View.VISIBLE else View.GONE }
+    }
+
     /** Make the content follow an explicit panel size (w/h > 0) or wrap around itself. */
     fun fit(w: Int, h: Int) {
         val ww = if (w > 0) ViewGroup.LayoutParams.MATCH_PARENT else ViewGroup.LayoutParams.WRAP_CONTENT
@@ -130,6 +158,22 @@ class Dockable(ctx: Context, title: String, val content: View, closable: Boolean
     }
 
     fun setPanelAlpha(a: Float) { bg.setColor((((a.coerceIn(0.2f, 1f) * 255).toInt()) shl 24) or 0x1F2329) }
+
+    /** Temporarily hand the panel's real content to a flyout (adaptive strips become a tall list); give it back with returnContent(). */
+    fun lendContent(): View? {
+        if (lent || collapsed) return null
+        lent = true; lentLp = content.layoutParams; removeView(content)
+        (content as? AdaptiveScroll)?.let { lentVert = it.isVerticalNow(); it.setVertical(true) }
+        return content
+    }
+
+    fun returnContent() {
+        if (!lent) return
+        lent = false
+        (content.parent as? ViewGroup)?.removeView(content)
+        (content as? AdaptiveScroll)?.setVertical(lentVert)
+        addView(content, lentLp ?: LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
 
     fun dock() {
         val p = parent as? View ?: return; val m = context.dp(40).toFloat()
@@ -230,12 +274,12 @@ class MainActivity : AppCompatActivity() {
             .putBoolean("st_arrow", st.arrow).putFloat("st_alpha", st.alpha).putBoolean("st_shadow", st.shadow)
         val w = root.width.toFloat(); val h = root.height.toFloat()
         for ((n, p) in panels) {
-            val vis = if (panelsHidden && n != "Quick") n !in hiddenBefore else p.visibility == View.VISIBLE
-            e.putFloat("p_${n}_x", p.x / w).putFloat("p_${n}_y", p.y / h).putBoolean("p_${n}_vis", vis)
+            val vis = if (panelsHidden && n != "Quick") n !in hiddenBefore else !p.collapsed
+            e.putFloat("p_${n}_x", (if (p.collapsed) p.expX else p.x) / w).putFloat("p_${n}_y", (if (p.collapsed) p.expY else p.y) / h).putBoolean("p_${n}_vis", vis)
                 .putBoolean("p_${n}_vert", (p.content as? AdaptiveScroll)?.isVerticalNow() ?: false)
-                .putInt("p_${n}_w", p.layoutParams.width).putInt("p_${n}_h", p.layoutParams.height)
+                .putInt("p_${n}_w", if (p.collapsed) p.expW else p.layoutParams.width).putInt("p_${n}_h", if (p.collapsed) p.expH else p.layoutParams.height)
         }
-        e.putInt("ref_w", root.width).putInt("ref_h", root.height).apply()
+        e.putInt("ref_w", root.width).putInt("ref_h", root.height).putInt("layout_v", 2).apply()
     }
 
     private fun restoreSettings() {
@@ -263,8 +307,9 @@ class MainActivity : AppCompatActivity() {
     override fun onConfigurationChanged(newConfig: Configuration) { super.onConfigurationChanged(newConfig); root.postDelayed({ layoutPanels() }, 250) }
 
     private fun addPanel(name: String, content: View, closable: Boolean) {
-        val d = Dockable(this, name, content, closable) { root.post { reflow() } }
-        d.onDropped = { onDropped(it) }; d.onHeaderTap = { panelMenuFor(it) }
+        val d = Dockable(this, name, content, closable)
+        d.onDropped = { onDropped(it) }; d.onHeaderTap = { if (it.collapsed) expand(it) else panelMenuFor(it) }
+        d.onFlyout = { p, v -> showFlyout(p, v) }; d.onMinimize = { collapse(it) }
         d.onResized = { p -> p.dock(); bump(p, panels.values); reflow() }
         panels[name] = d
         root.addView(d, FrameLayout.LayoutParams(-2, -2))
@@ -273,10 +318,13 @@ class MainActivity : AppCompatActivity() {
     private fun nameOf(d: Dockable) = panels.entries.firstOrNull { it.value === d }?.key ?: ""
 
     private fun setSize(n: String, w: Int, h: Int) {
-        panels[n]?.let { p -> p.layoutParams = (p.layoutParams as FrameLayout.LayoutParams).also { it.width = w; it.height = h }; p.fit(w, h) }
+        panels[n]?.let { p ->
+            if (p.collapsed) { p.expW = w; p.expH = h; p.fit(w, h) }
+            else { p.layoutParams = (p.layoutParams as FrameLayout.LayoutParams).also { it.width = w; it.height = h }; p.fit(w, h) }
+        }
     }
 
-    private fun toolboxW() = dp(2 * (iconDp + 16 + 4) + 12)
+    private fun toolboxW() = dp(iconDp + 16 + 4 + 14)
 
     private fun defSize(n: String, w: Int, h: Int): Pair<Int, Int> = when (n) {
         "Properties", "Status" -> w to ViewGroup.LayoutParams.WRAP_CONTENT
@@ -290,24 +338,27 @@ class MainActivity : AppCompatActivity() {
     private fun layoutPanels(reset: Boolean = false) {
         val w = root.width; val h = root.height
         val sp = getSharedPreferences("vd", MODE_PRIVATE)
+        panels.values.forEach { it.collapseTo(false) }
         // restore the saved arrangement if the screen size is unchanged
-        if (!reset && sp.contains("p_Toolbox_x") && abs(sp.getInt("ref_w", 0) - w) <= 2 && abs(sp.getInt("ref_h", 0) - h) <= 2) {
+        if (!reset && sp.getInt("layout_v", 0) >= 2 && sp.contains("p_Toolbox_x") && abs(sp.getInt("ref_w", 0) - w) <= 2 && abs(sp.getInt("ref_h", 0) - h) <= 2) {
             for ((n, p) in panels) {
                 (p.content as? AdaptiveScroll)?.setVertical(sp.getBoolean("p_${n}_vert", false))
                 val d = defSize(n, w, h)
                 var sw = sp.getInt("p_${n}_w", d.first); var sh = sp.getInt("p_${n}_h", d.second)
                 if ((n == "Toolbox" || n == "Objects") && (sw <= 0 || sh <= 0)) { sw = d.first; sh = d.second }
                 setSize(n, sw, sh)
-                p.visibility = if (n == "Quick" || sp.getBoolean("p_${n}_vis", true)) View.VISIBLE else View.GONE
+                p.visibility = View.VISIBLE
             }
             root.postDelayed({
                 for ((n, p) in panels) { p.x = sp.getFloat("p_${n}_x", 0f) * w; p.y = sp.getFloat("p_${n}_y", 0f) * h }
-                resolveAll(); reflow(); cv.postDelayed({ cv.fit() }, 80)
+                resolveAll()
+                for ((n, p) in panels) if (n != "Quick" && !sp.getBoolean("p_${n}_vis", true)) collapse(p)
+                reflow(); cv.postDelayed({ cv.fit() }, 80)
             }, 100)
             return
         }
-        if (reset) { panelsHidden = false; hiddenBefore.clear(); panels.values.forEach { it.visibility = View.VISIBLE } }
-        if (reset || !sp.contains("p_Objects_vis")) panels["Objects"]?.visibility = View.GONE
+        if (reset) { panelsHidden = false; hiddenBefore.clear() }
+        val hideObjects = reset || !sp.contains("p_Objects_vis")
         (panels["Palette"]?.content as? AdaptiveScroll)?.setVertical(true)
         (panels["Properties"]?.content as? AdaptiveScroll)?.setVertical(false)
         (panels["Status"]?.content as? AdaptiveScroll)?.setVertical(false)
@@ -320,13 +371,13 @@ class MainActivity : AppCompatActivity() {
             panels["Palette"]?.let { it.x = (w - it.width).toFloat(); it.y = (top + gap).toFloat() }
             panels["Quick"]?.let { it.x = (w - it.width - dp(70)).toFloat(); it.y = (top + gap).toFloat() }
             panels["Objects"]?.let { it.x = (w - it.width - dp(70)).toFloat(); it.y = (top + gap + dp(50)).toFloat() }
-            resolveAll(); reflow(); cv.postDelayed({ cv.fit() }, 80)
+            resolveAll(); if (hideObjects) panels["Objects"]?.let { collapse(it) }; reflow(); cv.postDelayed({ cv.fit() }, 80)
         }, 100)
     }
 
     /** Which edge a panel is docked to: 0 none (floating), 1 left, 2 right, 3 top, 4 bottom. Only strip-like panels count. */
     private fun sideOf(p: Dockable): Int {
-        if (p.visibility != View.VISIBLE || p.width == 0 || root.width == 0) return 0
+        if (p.visibility != View.VISIBLE || p.collapsed || p.width == 0 || root.width == 0) return 0
         val w = root.width.toFloat(); val h = root.height.toFloat(); val tol = 3f
         val l = p.x <= tol; val r = p.x + p.width >= w - tol; val t = p.y <= tol; val b = p.y + p.height >= h - tol
         val fw = p.width / w; val fh = p.height / h
@@ -436,8 +487,109 @@ class MainActivity : AppCompatActivity() {
         val items = mutableListOf<Pair<String, () -> Unit>>(
             "Dock left" to { dockTo(d, 1) }, "Dock right" to { dockTo(d, 2) }, "Dock top" to { dockTo(d, 3) }, "Dock bottom" to { dockTo(d, 4) },
             "Bigger" to { resizeBy(d, 1.25f) }, "Smaller" to { resizeBy(d, 0.8f) })
-        if (name != "Quick") items.add("Hide panel" to { d.visibility = View.GONE; root.post { reflow() } })
+        if (name != "Quick") items.add("Collapse to title" to { collapse(d) })
         menu("$name panel", items)
+    }
+
+    /** "Hide" = collapse to the title bar, so the title stays on screen and can be tapped to bring the panel back. */
+    private fun collapse(d: Dockable) {
+        if (d.collapsed) return
+        val lp = d.layoutParams as FrameLayout.LayoutParams
+        d.anchorR = d.x + d.width >= root.width - 3f; d.anchorB = d.y + d.height >= root.height - 3f
+        d.expW = lp.width; d.expH = lp.height; d.expX = d.x; d.expY = d.y
+        d.collapseTo(true)
+        lp.width = ViewGroup.LayoutParams.WRAP_CONTENT; lp.height = ViewGroup.LayoutParams.WRAP_CONTENT; d.layoutParams = lp
+        d.postDelayed({
+            d.x = if (d.anchorR) (root.width - d.width).toFloat() else d.expX
+            d.y = if (d.anchorB) (root.height - d.height).toFloat() else d.expY
+            bump(d, panels.values); reflow()
+        }, 80)
+    }
+
+    private fun expand(d: Dockable) {
+        if (!d.collapsed) return
+        d.collapseTo(false); setSize(nameOf(d), d.expW, d.expH)
+        d.bringToFront()
+        d.postDelayed({
+            d.x = if (d.anchorR) (root.width - d.width).toFloat() else d.expX
+            d.y = if (d.anchorB) (root.height - d.height).toFloat() else d.expY
+            d.x = d.x.coerceIn(0f, max(0f, (root.width - d.width).toFloat())); d.y = d.y.coerceIn(0f, max(0f, (root.height - d.height).toFloat()))
+            bump(d, panels.values); reflow()
+        }, 80)
+    }
+
+    private fun toolFlyout(dismiss: () -> Unit): View {
+        val g = GridLayout(this).apply { columnCount = 4; setPadding(dp(6), dp(6), dp(6), dp(6)) }
+        for (t in Tool.values()) {
+            val on = cv.tool == t
+            val cell = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; setPadding(dp(4), dp(6), dp(4), dp(4))
+                layoutParams = GridLayout.LayoutParams().apply { width = dp(70); height = ViewGroup.LayoutParams.WRAP_CONTENT; setMargins(dp(2), dp(2), dp(2), dp(2)) }
+                background = GradientDrawable().apply { setColor(if (on) GOLD else 0x22FFFFFF); cornerRadius = dp(8).toFloat() }
+            }
+            cell.addView(IconView(this, t.icon).also { it.isSelected = on }, LinearLayout.LayoutParams(dp(30), dp(30)))
+            cell.addView(TextView(this).apply { text = t.label; textSize = 9f; gravity = Gravity.CENTER; maxLines = 2; setTextColor(if (on) 0xFF0B192C.toInt() else Color.WHITE) }, LinearLayout.LayoutParams(-1, -2))
+            cell.setOnClickListener { cv.tool = t; dismiss() }
+            cell.setOnLongClickListener { dismiss(); toolOptions(t); true }
+            g.addView(cell)
+        }
+        return ScrollView(this).apply { addView(g) }
+    }
+
+    private fun paletteFlyout(dismiss: () -> Unit): View {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(6), dp(6), dp(6)) }
+        val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val grid = GridLayout(this).apply { columnCount = 6 }
+        fun fill(mode: Int) {
+            grid.removeAllViews()
+            for (c in paletteColors(mode)) {
+                val v = View(this); setSwatch(v, c)
+                v.layoutParams = GridLayout.LayoutParams().apply { width = dp(36); height = dp(36); setMargins(dp(3), dp(3), dp(3), dp(3)) }
+                v.setOnClickListener { cv.setFill(c); dismiss() }
+                v.setOnLongClickListener { cv.setStroke(c); dismiss(); true }
+                grid.addView(v)
+            }
+        }
+        listOf("RGB", "CMYK", "HSV", "Custom").forEachIndexed { i, n -> tabs.addView(chip(n) { fill(i) }) }
+        fill(palMode.coerceIn(0, 3))
+        box.addView(tabs); box.addView(ScrollView(this).apply { addView(grid) })
+        box.addView(TextView(this).apply { text = "Tap = fill · long-press = outline"; textSize = 10f; setTextColor(0xAAFFFFFF.toInt()); setPadding(dp(4), dp(4), dp(4), 0) })
+        return box
+    }
+
+    private fun quickFlyout(dismiss: () -> Unit): View {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(6), dp(6), dp(6)) }
+        val items = listOf<Pair<String, () -> Unit>>("☰  Menu" to { mainMenu() }, "↶  Undo" to { cv.undo() }, "↷  Redo" to { cv.redo() },
+            "✓  Finish path" to { cv.finishPen() }, "⛶  Fit page" to { cv.fit() }, "◩  Collapse / show panels" to { togglePanels() })
+        for ((t, a) in items) col.addView(chip(t) { dismiss(); a() })
+        return col
+    }
+
+    /** ▾ on a panel: a small popup showing everything in that panel (all tool icons, all colours, all controls). */
+    private fun showFlyout(d: Dockable, anchor: View) {
+        val name = nameOf(d); val pop = PopupWindow(this); var lent = false
+        val dismiss = { pop.dismiss() }
+        val body: View = when (name) {
+            "Toolbox" -> toolFlyout(dismiss)
+            "Palette" -> paletteFlyout(dismiss)
+            "Quick" -> quickFlyout(dismiss)
+            else -> { val c = d.lendContent() ?: return; lent = true; FrameLayout(this).apply { addView(c, FrameLayout.LayoutParams(-2, -2)) } }
+        }
+        val holder = FrameLayout(this).apply {
+            background = GradientDrawable().apply { setColor(0xF51F2329.toInt()); cornerRadius = dp(10).toFloat(); setStroke(1, 0x66E5A93C) }
+            setPadding(dp(4), dp(4), dp(4), dp(4)); addView(body)
+        }
+        val dm = resources.displayMetrics
+        holder.measure(View.MeasureSpec.makeMeasureSpec((dm.widthPixels * 0.94f).toInt(), View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec((dm.heightPixels * 0.7f).toInt(), View.MeasureSpec.AT_MOST))
+        val pw = holder.measuredWidth; val ph = holder.measuredHeight
+        pop.contentView = holder; pop.width = pw; pop.height = ph
+        pop.isFocusable = true; pop.isOutsideTouchable = true; pop.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        pop.setOnDismissListener { if (lent) d.returnContent() }
+        val loc = IntArray(2); anchor.getLocationOnScreen(loc)
+        val xoff = if (loc[0] + pw > dm.widthPixels) dm.widthPixels - pw - loc[0] else 0
+        val yoff = if (loc[1] + anchor.height + ph > dm.heightPixels) -(anchor.height + ph) else 0
+        pop.showAsDropDown(anchor, xoff, yoff)
     }
 
     private fun applyPanelPrefs() { panels.values.forEach { it.setPanelAlpha(panelAlpha) }; iconSizeApplier(iconDp); appliedIcon = iconDp }
@@ -543,7 +695,7 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Toolbox ----------
     private fun toolbox(): View {
-        val grid = GridLayout(this).apply { columnCount = 2; setPadding(dp(4), dp(4), dp(4), dp(4)) }
+        val grid = GridLayout(this).apply { columnCount = 1; setPadding(dp(4), dp(4), dp(4), dp(4)) }
         val icons = HashMap<Tool, FrameLayout>()
         for (t in Tool.values()) {
             val cell = FrameLayout(this).apply {
@@ -747,14 +899,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun togglePanels() {
-        if (!panelsHidden) { hiddenBefore.clear(); panels.forEach { (n, p) -> if (n != "Quick") { if (p.visibility == View.GONE) hiddenBefore.add(n) else p.visibility = View.GONE } } }
-        else panels.forEach { (n, p) -> if (n != "Quick" && n !in hiddenBefore) p.visibility = View.VISIBLE }
-        panelsHidden = !panelsHidden; root.post { resolveAll(); reflow() }
+        if (!panelsHidden) { hiddenBefore.clear(); panels.forEach { (n, p) -> if (n != "Quick") { if (p.collapsed) hiddenBefore.add(n) else collapse(p) } } }
+        else panels.forEach { (n, p) -> if (n != "Quick" && n !in hiddenBefore) expand(p) }
+        panelsHidden = !panelsHidden; root.postDelayed({ resolveAll(); reflow() }, 150)
     }
 
     private fun panelMenu() {
-        val names = panels.keys.filter { it != "Quick" }.toTypedArray(); val checked = BooleanArray(names.size) { panels[names[it]]!!.visibility == View.VISIBLE }
-        AlertDialog.Builder(this).setTitle("Show / hide panels").setMultiChoiceItems(names, checked) { _, i, on -> panels[names[i]]!!.apply { visibility = if (on) View.VISIBLE else View.GONE; if (on) { bringToFront(); dock() } } }.setPositiveButton("Done", null).setOnDismissListener { root.post { resolveAll(); reflow() } }.show()
+        val names = panels.keys.filter { it != "Quick" }.toTypedArray(); val checked = BooleanArray(names.size) { !panels[names[it]]!!.collapsed }
+        AlertDialog.Builder(this).setTitle("Show / collapse panels").setMultiChoiceItems(names, checked) { _, i, on -> panels[names[i]]!!.let { if (on) expand(it) else collapse(it) } }
+            .setPositiveButton("Done", null).setOnDismissListener { root.postDelayed({ resolveAll(); reflow() }, 150) }.show()
     }
 
     // ---------- Menus ----------

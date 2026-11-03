@@ -13,3 +13,4 @@ Saved between sessions (SharedPreferences, on pause): panel positions/sizes/visi
 Autosave: the drawing is written to internal storage (autosave.vdt) whenever the app is paused and restored on next launch (undo history is not kept). Use Save project to keep a copy you can share.
 SVG import (paths, basic shapes, groups, transforms, solid colours), true contour offset (path booleans), perspective extrude, and mesh / gradient / pattern frames that rotate with the object.
 Settings (☰ → Settings…): canvas/grid/guide/selection colours, grid opacity, panel opacity, tool icon size, snap radius and object-snap types, freehand smoothing, undo steps. Panels: drag title to move, ◢ to resize, tap title for dock/size menu; panels never overlap each other (they snap flush or are moved to the nearest free spot).
+Toolbox is a single column; ▾ on any panel opens a flyout with everything in it. Hiding a panel collapses it to its title bar (tap the title to bring it back).
