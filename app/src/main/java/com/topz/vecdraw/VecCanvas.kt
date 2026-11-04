@@ -59,6 +59,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     var guideColor = 0xFF00BCD4.toInt(); var selColor = 0xFFE5A93C.toInt()
     var snapRadius = 10f; var snapNodes = true; var snapCenters = false; var snapEdges = false
     var freehandEps = 2f; var undoLimit = 60
+    var handleScale = 1f   // size of touch handles / hit areas
     var meshRows = 3; var meshCols = 3; private var meshV = -1
     private var meshHdir = -1
     var polySides = 6; var starPts = 5; var basicIdx = 0
@@ -218,19 +219,19 @@ class VecCanvas(ctx: Context) : View(ctx) {
             val k = cornersScr(b)
             c.drawRect(k[0], k[1], k[4], k[5], selP)
             if (tool == Tool.PICK) {
-                for (i in 0 until 4) { c.drawRect(k[i * 2] - 9, k[i * 2 + 1] - 9, k[i * 2] + 9, k[i * 2 + 1] + 9, hFill); c.drawRect(k[i * 2] - 9, k[i * 2 + 1] - 9, k[i * 2] + 9, k[i * 2 + 1] + 9, hStroke) }
+                for (i in 0 until 4) { c.drawRect(k[i * 2] - 9 * handleScale, k[i * 2 + 1] - 9 * handleScale, k[i * 2] + 9 * handleScale, k[i * 2 + 1] + 9 * handleScale, hFill); c.drawRect(k[i * 2] - 9 * handleScale, k[i * 2 + 1] - 9 * handleScale, k[i * 2] + 9 * handleScale, k[i * 2 + 1] + 9 * handleScale, hStroke) }
                 val rx = (k[0] + k[2]) / 2; val ry = k[1] - 40
-                c.drawLine(rx, k[1], rx, ry, selP); c.drawCircle(rx, ry, 10f, hFill); c.drawCircle(rx, ry, 10f, hStroke)
+                c.drawLine(rx, k[1], rx, ry, selP); c.drawCircle(rx, ry, 10f * handleScale, hFill); c.drawCircle(rx, ry, 10f * handleScale, hStroke)
             }
         }
         if (tool == Tool.NODE) nodeObj()?.let { o ->
             for ((i, n) in o.nodes.withIndex()) {
                 val x = scrX(n.x); val y = scrY(n.y)
                 if (i == selNode) {
-                    if (!n.inLine()) { c.drawLine(x, y, scrX(n.ix), scrY(n.iy), selP); c.drawCircle(scrX(n.ix), scrY(n.iy), 8f, hGold) }
-                    if (!n.outLine()) { c.drawLine(x, y, scrX(n.ox), scrY(n.oy), selP); c.drawCircle(scrX(n.ox), scrY(n.oy), 8f, hGold) }
-                    c.drawRect(x - 9, y - 9, x + 9, y + 9, hGold)
-                } else { c.drawRect(x - 7, y - 7, x + 7, y + 7, hFill); c.drawRect(x - 7, y - 7, x + 7, y + 7, hStroke) }
+                    if (!n.inLine()) { c.drawLine(x, y, scrX(n.ix), scrY(n.iy), selP); c.drawCircle(scrX(n.ix), scrY(n.iy), 8f * handleScale, hGold) }
+                    if (!n.outLine()) { c.drawLine(x, y, scrX(n.ox), scrY(n.oy), selP); c.drawCircle(scrX(n.ox), scrY(n.oy), 8f * handleScale, hGold) }
+                    c.drawRect(x - 9 * handleScale, y - 9 * handleScale, x + 9 * handleScale, y + 9 * handleScale, hGold)
+                } else { c.drawRect(x - 7 * handleScale, y - 7 * handleScale, x + 7 * handleScale, y + 7 * handleScale, hFill); c.drawRect(x - 7 * handleScale, y - 7 * handleScale, x + 7 * handleScale, y + 7 * handleScale, hStroke) }
             }
         }
         if (tool == Tool.MESH) meshObj()?.takeIf { it.mesh != null }?.let { o ->
@@ -242,15 +243,15 @@ class VecCanvas(ctx: Context) : View(ctx) {
             }
             for (k in m.indices) {
                 val p = meshPt(o, k); meshP.color = m[k]
-                c.drawCircle(scrX(p.x), scrY(p.y), if (k == meshV) 16f else 12f, meshP)
-                c.drawCircle(scrX(p.x), scrY(p.y), if (k == meshV) 16f else 12f, if (k == meshV) hStroke else ringW)
+                c.drawCircle(scrX(p.x), scrY(p.y), (if (k == meshV) 16f else 12f) * handleScale, meshP)
+                c.drawCircle(scrX(p.x), scrY(p.y), (if (k == meshV) 16f else 12f) * handleScale, if (k == meshV) hStroke else ringW)
             }
             if (meshV in m.indices) {
                 val vp = meshPt(o, meshV)
                 for (d in 0 until 4) {
                     val hp = meshHandle(o, meshV, d) ?: continue
                     c.drawLine(scrX(vp.x), scrY(vp.y), scrX(hp.x), scrY(hp.y), selP)
-                    c.drawCircle(scrX(hp.x), scrY(hp.y), 10f, hGold); c.drawCircle(scrX(hp.x), scrY(hp.y), 10f, ringW)
+                    c.drawCircle(scrX(hp.x), scrY(hp.y), 10f * handleScale, hGold); c.drawCircle(scrX(hp.x), scrY(hp.y), 10f * handleScale, ringW)
                 }
             }
         }
@@ -258,7 +259,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
             if (tool == Tool.ENVELOPE && sel.isNotEmpty()) {
                 val ep = Path().apply { moveTo(scrX(q[0]), scrY(q[1])); for (i in 1..3) lineTo(scrX(q[i * 2]), scrY(q[i * 2 + 1])); close() }
                 c.drawPath(ep, selP)
-                for (i in 0 until 4) { c.drawCircle(scrX(q[i * 2]), scrY(q[i * 2 + 1]), 11f, hFill); c.drawCircle(scrX(q[i * 2]), scrY(q[i * 2 + 1]), 11f, hStroke) }
+                for (i in 0 until 4) { c.drawCircle(scrX(q[i * 2]), scrY(q[i * 2 + 1]), 11f * handleScale, hFill); c.drawCircle(scrX(q[i * 2]), scrY(q[i * 2 + 1]), 11f * handleScale, hStroke) }
             }
         }
         pen?.let { p -> for (n in p.nodes) { c.drawCircle(scrX(n.x), scrY(n.y), 7f, hGold) } }
@@ -372,8 +373,8 @@ class VecCanvas(ctx: Context) : View(ctx) {
     // ---------- Pick tool ----------
     private fun handleAt(b: RectF, x: Float, y: Float): Int {
         val k = cornersScr(b)
-        for (i in 0 until 4) if (hypot(x - k[i * 2], y - k[i * 2 + 1]) < 36f) return i
-        if (hypot(x - (k[0] + k[2]) / 2, y - (k[1] - 40)) < 36f) return 4
+        for (i in 0 until 4) if (hypot(x - k[i * 2], y - k[i * 2 + 1]) < 36f * handleScale) return i
+        if (hypot(x - (k[0] + k[2]) / 2, y - (k[1] - 40)) < 36f * handleScale) return 4
         return -1
     }
 
@@ -414,7 +415,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     private fun nodeDown(x: Float, y: Float) {
         val o = nodeObj()
         if (o != null) {
-            val tol = 24f
+            val tol = 24f * handleScale
             if (selNode in o.nodes.indices) {
                 val n = o.nodes[selNode]
                 if (!n.inLine() && hypot(scrX(n.ix) - x, scrY(n.iy) - y) < tol) { mode = M_HIN; return }
@@ -726,12 +727,12 @@ class VecCanvas(ctx: Context) : View(ctx) {
             if (meshV in 0 until o.meshR * o.meshC) {
                 for (d in 0 until 4) {
                     val hp = meshHandle(o, meshV, d) ?: continue
-                    if (hypot(scrX(hp.x) - x, scrY(hp.y) - y) < 28f) { meshHdir = d; mode = M_MESHH; return }
+                    if (hypot(scrX(hp.x) - x, scrY(hp.y) - y) < 28f * handleScale) { meshHdir = d; mode = M_MESHH; return }
                 }
             }
             for (k in 0 until o.meshR * o.meshC) {
                 val p = meshPt(o, k)
-                if (hypot(scrX(p.x) - x, scrY(p.y) - y) < 30f) { meshV = k; mode = M_MESHV; invalidate(); onChange(); return }
+                if (hypot(scrX(p.x) - x, scrY(p.y) - y) < 30f * handleScale) { meshV = k; mode = M_MESHV; invalidate(); onChange(); return }
             }
         }
         val h = topHit(ox0, oy0)
@@ -849,7 +850,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     private fun envDown(x: Float, y: Float) {
         if (!envInit()) { topHit(ox0, oy0)?.takeIf { it.kind == Kind.PATH }?.let { sel.clear(); sel.add(it); envInit(); changed() }; return }
         val q = envQ!!
-        for (i in 0 until 4) if (hypot(scrX(q[i * 2]) - x, scrY(q[i * 2 + 1]) - y) < 36f) { envCorner = i; mode = M_ENV; return }
+        for (i in 0 until 4) if (hypot(scrX(q[i * 2]) - x, scrY(q[i * 2 + 1]) - y) < 36f * handleScale) { envCorner = i; mode = M_ENV; return }
         topHit(ox0, oy0)?.takeIf { it.kind == Kind.PATH }?.let { if (it !in sel) { sel.clear(); sel.add(it); envInit(); changed() } }
     }
 

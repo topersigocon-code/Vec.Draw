@@ -8,6 +8,7 @@ import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.content.res.Configuration
 import android.net.Uri
+import android.util.AttributeSet
 import android.text.TextUtils
 import android.os.Bundle
 import android.text.InputType
@@ -62,8 +63,43 @@ class IconView(ctx: Context, d: String) : View(ctx) {
     }
 }
 
+/** Lays children out left to right and wraps onto new lines when the available width runs out (one line when width is unbounded). */
+class FlowLayout(ctx: Context) : ViewGroup(ctx) {
+    private var xs = IntArray(0); private var ys = IntArray(0)
+    override fun checkLayoutParams(p: ViewGroup.LayoutParams?) = p is ViewGroup.MarginLayoutParams
+    override fun generateDefaultLayoutParams(): ViewGroup.LayoutParams = ViewGroup.MarginLayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+    override fun generateLayoutParams(attrs: AttributeSet?): ViewGroup.LayoutParams = ViewGroup.MarginLayoutParams(context, attrs)
+    override fun generateLayoutParams(p: ViewGroup.LayoutParams?): ViewGroup.LayoutParams = ViewGroup.MarginLayoutParams(p)
+
+    override fun onMeasure(wSpec: Int, hSpec: Int) {
+        val maxW = if (MeasureSpec.getMode(wSpec) == MeasureSpec.UNSPECIFIED) Int.MAX_VALUE else MeasureSpec.getSize(wSpec)
+        xs = IntArray(childCount); ys = IntArray(childCount)
+        var x = 0; var y = 0; var rowH = 0; var widest = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i); if (c.visibility == GONE) continue
+            val lp = c.layoutParams as ViewGroup.MarginLayoutParams
+            c.measure(getChildMeasureSpec(wSpec, 0, lp.width), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+            val w = c.measuredWidth + lp.leftMargin + lp.rightMargin; val h = c.measuredHeight + lp.topMargin + lp.bottomMargin
+            if (x > 0 && x + w > maxW) { widest = max(widest, x); x = 0; y += rowH; rowH = 0 }
+            xs[i] = x; ys[i] = y; x += w; rowH = max(rowH, h)
+        }
+        widest = max(widest, x)
+        setMeasuredDimension(resolveSize(widest, wSpec), resolveSize(y + rowH, hSpec))
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        for (i in 0 until childCount) {
+            val c = getChildAt(i); if (c.visibility == GONE) continue
+            val lp = c.layoutParams as ViewGroup.MarginLayoutParams
+            val cx = xs[i] + lp.leftMargin; val cy = ys[i] + lp.topMargin
+            c.layout(cx, cy, cx + c.measuredWidth, cy + c.measuredHeight)
+        }
+    }
+}
+
 /** Scroll wrapper whose row can flip between horizontal (HorizontalScrollView) and vertical (ScrollView) layouts. */
 class AdaptiveScroll(ctx: Context, private val row: LinearLayout) : FrameLayout(ctx) {
+    var onOrient: (Boolean) -> Unit = {}
     private var vertical = false
     init { rebuild() }
     fun isVerticalNow() = vertical
@@ -73,7 +109,7 @@ class AdaptiveScroll(ctx: Context, private val row: LinearLayout) : FrameLayout(
         row.orientation = if (vertical) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
         row.gravity = if (vertical) Gravity.CENTER_HORIZONTAL else Gravity.CENTER_VERTICAL
         val sc: ViewGroup = if (vertical) ScrollView(context) else HorizontalScrollView(context).also { it.isHorizontalScrollBarEnabled = false }
-        sc.addView(row); addView(sc)
+        sc.addView(row); addView(sc); onOrient(vertical)
     }
 }
 
@@ -268,7 +304,7 @@ class MainActivity : AppCompatActivity() {
             .putInt("palMode", palMode).putString("tool", cv.tool.name)
             .putInt("bg", cv.bgColor).putInt("gridc", cv.gridColor).putInt("gridA", cv.gridAlpha).putInt("guidec", cv.guideColor).putInt("selc", cv.selColor)
             .putFloat("snapR", cv.snapRadius).putBoolean("snapN", cv.snapNodes).putBoolean("snapC", cv.snapCenters).putBoolean("snapE", cv.snapEdges)
-            .putFloat("fhEps", cv.freehandEps).putInt("undoN", cv.undoLimit).putFloat("pAlpha", panelAlpha).putInt("iconDp", iconDp)
+            .putFloat("hScale", cv.handleScale).putFloat("fhEps", cv.freehandEps).putInt("undoN", cv.undoLimit).putFloat("pAlpha", panelAlpha).putInt("iconDp", iconDp)
             .putString("st_fill", colStr(st.fill)).putString("st_fill2", colStr(st.fill2)).putString("st_stroke", colStr(st.stroke))
             .putFloat("st_sw", st.strokeW).putInt("st_cap", st.cap).putInt("st_join", st.join).putInt("st_dash", st.dash)
             .putBoolean("st_arrow", st.arrow).putFloat("st_alpha", st.alpha).putBoolean("st_shadow", st.shadow)
@@ -294,7 +330,7 @@ class MainActivity : AppCompatActivity() {
         cv.guideColor = sp.getInt("guidec", cv.guideColor); cv.selColor = sp.getInt("selc", cv.selColor)
         cv.snapRadius = sp.getFloat("snapR", cv.snapRadius).coerceIn(4f, 30f); cv.snapNodes = sp.getBoolean("snapN", true)
         cv.snapCenters = sp.getBoolean("snapC", false); cv.snapEdges = sp.getBoolean("snapE", false)
-        cv.freehandEps = sp.getFloat("fhEps", cv.freehandEps).coerceIn(1f, 10f); cv.undoLimit = sp.getInt("undoN", cv.undoLimit).coerceIn(10, 200)
+        cv.handleScale = sp.getFloat("hScale", 1f).coerceIn(0.6f, 2f); cv.freehandEps = sp.getFloat("fhEps", cv.freehandEps).coerceIn(1f, 10f); cv.undoLimit = sp.getInt("undoN", cv.undoLimit).coerceIn(10, 200)
         panelAlpha = sp.getFloat("pAlpha", panelAlpha).coerceIn(0.3f, 1f); iconDp = sp.getInt("iconDp", iconDp).coerceIn(24, 44)
         cv.applyTheme()
         st.fill = col("st_fill", st.fill); st.fill2 = col("st_fill2", null); st.stroke = col("st_stroke", st.stroke)
@@ -560,7 +596,7 @@ class MainActivity : AppCompatActivity() {
     private fun quickFlyout(dismiss: () -> Unit): View {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(6), dp(6), dp(6)) }
         val items = listOf<Pair<String, () -> Unit>>("☰  Menu" to { mainMenu() }, "↶  Undo" to { cv.undo() }, "↷  Redo" to { cv.redo() },
-            "✓  Finish path" to { cv.finishPen() }, "⛶  Fit page" to { cv.fit() }, "◩  Collapse / show panels" to { togglePanels() })
+            "✓  Finish path" to { cv.finishPen() }, "⛶  Fit page" to { cv.fit() }, "◩  Collapse / show panels" to { togglePanels() }, "▤  Tidy collapsed titles" to { tidyCollapsed() })
         for ((t, a) in items) col.addView(chip(t) { dismiss(); a() })
         return col
     }
@@ -580,7 +616,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(4), dp(4), dp(4), dp(4)); addView(body)
         }
         val dm = resources.displayMetrics
-        holder.measure(View.MeasureSpec.makeMeasureSpec((dm.widthPixels * 0.94f).toInt(), View.MeasureSpec.AT_MOST),
+        holder.measure(View.MeasureSpec.makeMeasureSpec(minOf((dm.widthPixels * 0.94f).toInt(), dp(340)), View.MeasureSpec.AT_MOST),
             View.MeasureSpec.makeMeasureSpec((dm.heightPixels * 0.7f).toInt(), View.MeasureSpec.AT_MOST))
         val pw = holder.measuredWidth; val ph = holder.measuredHeight
         pop.contentView = holder; pop.width = pw; pop.height = ph
@@ -590,6 +626,19 @@ class MainActivity : AppCompatActivity() {
         val xoff = if (loc[0] + pw > dm.widthPixels) dm.widthPixels - pw - loc[0] else 0
         val yoff = if (loc[1] + anchor.height + ph > dm.heightPixels) -(anchor.height + ph) else 0
         pop.showAsDropDown(anchor, xoff, yoff)
+    }
+
+    /** Line the collapsed title bars up along the top of the canvas area so none hide behind or on top of another. */
+    private fun tidyCollapsed() {
+        val lp = cv.layoutParams as FrameLayout.LayoutParams
+        val gap = dp(6); val left = lp.leftMargin + gap; val right = root.width - lp.rightMargin - gap
+        var x = left.toFloat(); var y = (lp.topMargin + gap).toFloat(); var rowH = 0f
+        for (p in panels.values.filter { it.collapsed }.sortedBy { it.x }) {
+            if (x > left && x + p.width > right) { x = left.toFloat(); y += rowH + gap; rowH = 0f }
+            p.x = x; p.y = y; p.anchorR = false; p.anchorB = false
+            x += p.width + gap; rowH = max(rowH, p.height.toFloat())
+        }
+        for (p in panels.values.filter { it.collapsed }) bump(p, panels.values)
     }
 
     private fun applyPanelPrefs() { panels.values.forEach { it.setPanelAlpha(panelAlpha) }; iconSizeApplier(iconDp); appliedIcon = iconDp }
@@ -606,7 +655,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun resetSettings() {
         cv.bgColor = 0xFF1B1D21.toInt(); cv.gridColor = Color.BLACK; cv.gridAlpha = 15; cv.guideColor = 0xFF00BCD4.toInt(); cv.selColor = GOLD
-        cv.snapRadius = 10f; cv.snapNodes = true; cv.snapCenters = false; cv.snapEdges = false; cv.freehandEps = 2f; cv.undoLimit = 60
+        cv.snapRadius = 10f; cv.snapNodes = true; cv.snapCenters = false; cv.snapEdges = false; cv.freehandEps = 2f; cv.undoLimit = 60; cv.handleScale = 1f
         panelAlpha = 0.93f; iconDp = 30; applySettings()
     }
 
@@ -640,6 +689,7 @@ class MainActivity : AppCompatActivity() {
         colorRow("Guides", { cv.guideColor }, { cv.guideColor = it })
         colorRow("Selection & handles", { cv.selColor }, { cv.selColor = it })
         slider("Grid opacity", 5, 100, { cv.gridAlpha }, { cv.gridAlpha = it }, "%")
+        slider("Touch handle size", 60, 200, { (cv.handleScale * 100).toInt() }, { cv.handleScale = it / 100f }, "%")
         head("Panels")
         slider("Panel opacity", 30, 100, { (panelAlpha * 100).toInt() }, { panelAlpha = it / 100f }, "%")
         slider("Tool icon size", 24, 44, { iconDp }, { iconDp = it }, " dp")
@@ -770,10 +820,17 @@ class MainActivity : AppCompatActivity() {
         val applyBounds = { cv.setBounds(f(ex.text, 0f) * uf(), f(ey.text, 0f) * uf(), f(ew.text, 1f) * uf(), f(eh.text, 1f) * uf()) }
         listOf(ex, ey, ew, eh).forEach { e -> e.setOnEditorActionListener { _, _, _ -> applyBounds(); e.clearFocus(); true } }
         val unitC = chip("mm") { menu("Units", listOf("mm", "cm", "in", "px").map { u -> u to { cv.doc.unit = u; cv.changed(); cv.status() } }) }
-        listOf(label("Fill"), fillSw, chip("∅") { cv.setFill(null) }, label("Line"), strokeSw, chip("∅") { cv.setStroke(null) },
-            chip("−") { cv.setStrokeW(max(0f, obj().strokeW - 0.1f)) }, wTxt, chip("+") { cv.setStrokeW(obj().strokeW + 0.1f) },
-            capC, joinC, dashC, arrC, gradC, shC, ratC, label("α"), alpha, label("X"), ex, label("Y"), ey, label("W"), ew, label("H"), eh, unitC
-        ).forEach { row.addView(it) }
+        val titles = mutableListOf<TextView>()
+        fun group(title: String, vararg items: View) {
+            val g = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), dp(2), dp(10), dp(2)) }
+            val t = label(title).also { it.visibility = View.GONE; titles.add(it) }
+            val f = FlowLayout(this); items.forEach { f.addView(it) }
+            g.addView(t); g.addView(f); row.addView(g)
+        }
+        group("Colour", label("Fill"), fillSw, chip("∅") { cv.setFill(null) }, label("Line"), strokeSw, chip("∅") { cv.setStroke(null) })
+        group("Outline", chip("−") { cv.setStrokeW(max(0f, obj().strokeW - 0.1f)) }, wTxt, chip("+") { cv.setStrokeW(obj().strokeW + 0.1f) }, capC, joinC, dashC, arrC)
+        group("Effects", gradC, shC, label("α"), alpha)
+        group("Size & position", ratC, label("X"), ex, label("Y"), ey, label("W"), ew, label("H"), eh, unitC)
         refreshers.add {
             val o = obj(); setSwatch(fillSw, o.fill); setSwatch(strokeSw, o.stroke); wTxt.text = "${fmt(o.strokeW)}mm"
             capC.text = "Cap:" + arrayOf("R", "Sq", "B")[o.cap]; joinC.text = "Join:" + arrayOf("R", "Bev", "Mit")[o.join]; dashC.text = "Dash:" + arrayOf("—", "- -", "···", "-·")[o.dash]
@@ -785,7 +842,9 @@ class MainActivity : AppCompatActivity() {
                 if (!ew.hasFocus()) ew.setText(fmt(b.width() / u)); if (!eh.hasFocus()) eh.setText(fmt(b.height() / u))
             }
         }
-        return hscroll(row)
+        val sc = AdaptiveScroll(this, row)
+        sc.onOrient = { v -> titles.forEach { it.visibility = if (v) View.VISIBLE else View.GONE } }
+        return sc
     }
 
     // ---------- Colour picker (RGB / CMYK / HSV) & palette ----------
@@ -907,7 +966,7 @@ class MainActivity : AppCompatActivity() {
     private fun panelMenu() {
         val names = panels.keys.filter { it != "Quick" }.toTypedArray(); val checked = BooleanArray(names.size) { !panels[names[it]]!!.collapsed }
         AlertDialog.Builder(this).setTitle("Show / collapse panels").setMultiChoiceItems(names, checked) { _, i, on -> panels[names[i]]!!.let { if (on) expand(it) else collapse(it) } }
-            .setPositiveButton("Done", null).setOnDismissListener { root.postDelayed({ resolveAll(); reflow() }, 150) }.show()
+            .setNeutralButton("Tidy titles") { _, _ -> tidyCollapsed() }.setPositiveButton("Done", null).setOnDismissListener { root.postDelayed({ resolveAll(); reflow() }, 150) }.show()
     }
 
     // ---------- Menus ----------
