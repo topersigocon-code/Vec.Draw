@@ -43,6 +43,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
         const val M_NONE = 0; const val M_PAN = 1; const val M_MOVE = 2; const val M_SCALE = 3; const val M_ROT = 4
         const val M_MARQ = 5; const val M_NODE = 6; const val M_HIN = 7; const val M_HOUT = 8; const val M_SHAPE = 9
         const val M_SHAPE3 = 10; const val M_PEN = 11; const val M_FH = 12; const val M_ENV = 13; const val M_MESHV = 14; const val M_MESHH = 15
+        var clip: List<VObj> = emptyList(); var pasteCount = 0
     }
 
     var doc = Doc()
@@ -360,7 +361,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
         when (mode) {
             M_MARQ -> {
                 val r = RectF(min(ox0, rx), min(oy0, ry), max(ox0, rx), max(oy0, ry))
-                sel.clear(); doc.objs.filter { pickable(it) && r.contains(it.bounds()) }.let { sel.addAll(it) }
+                sel.clear(); doc.objs.filter { pickable(it) && r.contains(it.bounds()) }.let { sel.addAll(it) }; addGroupMates()
                 changed()
             }
             M_SHAPE -> shapeUp()
@@ -392,7 +393,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
             }
         }
         val o = topHit(ox0, oy0)
-        if (o != null) { if (o !in sel) { sel.clear(); sel.add(o) }; mode = M_MOVE; sb = selBounds()!!; rawDx = 0f; rawDy = 0f }
+        if (o != null) { if (o !in sel) { sel.clear(); sel.add(o); addGroupMates() }; mode = M_MOVE; sb = selBounds()!!; rawDx = 0f; rawDy = 0f }
         else { sel.clear(); mode = M_MARQ }
         selNode = -1; onChange()
     }
@@ -615,7 +616,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
             do {
                 val len = pm.length; if (len <= 0f) continue
                 val n = max(8, (len / 0.5f).toInt().coerceAtMost(800)); val pos = FloatArray(2)
-                val piece = o.copy(); piece.closed = pm.isClosed
+                val piece = o.copy(); piece.holes = mutableListOf(); piece.closed = pm.isClosed
                 piece.nodes = MutableList(n) { i -> pm.getPosTan(len * i / n, pos, null); Node(pos[0], pos[1]) }
                 doc.objs.add(at++, piece); newSel.add(piece)
             } while (pm.nextContour())
@@ -649,7 +650,178 @@ class VecCanvas(ctx: Context) : View(ctx) {
     fun setStroke(c: Int?) { style.stroke = c; editSel { it.stroke = c } }
     fun setStrokeW(w: Float) { style.strokeW = w; editSel { it.strokeW = w } }
     fun deleteSel() { if (sel.isEmpty()) return; checkpoint(); doc.objs.removeAll(sel.toSet()); sel.clear(); selNode = -1; changed() }
-    fun duplicate() { if (sel.isEmpty()) return; checkpoint(); val c = sel.map { it.copy().also { d -> d.transform(Matrix().apply { setTranslate(5f, 5f) }) } }; doc.objs.addAll(c); sel.clear(); sel.addAll(c); changed() }
+    fun duplicate() {
+        if (sel.isEmpty()) return; checkpoint()
+        val gmap = HashMap<Int, Int>(); var next = (doc.objs.maxOfOrNull { it.group } ?: 0) + 1
+        val c = doc.objs.filter { it in sel }.map { o -> o.copy().also { d -> d.transform(Matrix().apply { setTranslate(5f, 5f) }); if (d.group != 0) d.group = gmap.getOrPut(d.group) { next++ } } }
+        doc.objs.addAll(c); sel.clear(); sel.addAll(c); changed()
+    }
+    // ---------- groups ----------
+    private fun addGroupMates() {
+        val ids = sel.filter { it.group != 0 }.map { it.group }.toSet(); if (ids.isEmpty()) return
+        for (o in doc.objs) if (o.group in ids && o !in sel && pickable(o)) sel.add(o)
+    }
+
+    fun selectOne(o: VObj) { sel.clear(); sel.add(o); addGroupMates(); selNode = -1; changed() }
+
+    fun group() {
+        if (sel.size < 2) return; checkpoint()
+        val id = (doc.objs.maxOfOrNull { it.group } ?: 0) + 1
+        val items = doc.objs.filter { it in sel }; val top = doc.objs.indexOf(items.last())
+        items.forEach { it.group = id }
+        doc.objs.removeAll(items.toSet()); doc.objs.addAll((top + 1 - items.size).coerceIn(0, doc.objs.size), items)
+        changed()
+    }
+
+    fun ungroup() {
+        val g = sel.filter { it.group != 0 }; if (g.isEmpty()) return
+        checkpoint(); g.forEach { it.group = 0 }; changed()
+    }
+
+    // ---------- copy / cut / paste ----------
+    fun copySel() { if (sel.isEmpty()) return; clip = doc.objs.filter { it in sel }.map { it.copy() }; pasteCount = 0 }
+    fun cutSel() { if (sel.isEmpty()) return; copySel(); deleteSel() }
+    fun paste(inPlace: Boolean) {
+        if (clip.isEmpty()) return; checkpoint(); pasteCount++
+        val d = if (inPlace) 0f else 5f * pasteCount
+        val gmap = HashMap<Int, Int>(); var next = (doc.objs.maxOfOrNull { it.group } ?: 0) + 1
+        val made = clip.map { src ->
+            val c = src.copy(); c.transform(Matrix().apply { setTranslate(d, d) }); c.layer = activeLayer.coerceIn(0, doc.layers.lastIndex)
+            if (c.group != 0) c.group = gmap.getOrPut(c.group) { next++ }
+            c
+        }
+        doc.objs.addAll(made); sel.clear(); sel.addAll(made); selNode = -1; changed()
+    }
+
+    // ---------- align / distribute (a group moves as one unit) ----------
+    private fun units(): List<List<VObj>> {
+        val seen = HashSet<Int>(); val out = ArrayList<List<VObj>>()
+        for (o in sel) { if (o.group == 0) out.add(listOf(o)) else if (seen.add(o.group)) out.add(sel.filter { it.group == o.group }) }
+        return out
+    }
+    private fun unitBounds(u: List<VObj>): RectF { val r = RectF(u[0].bounds()); for (i in 1 until u.size) r.union(u[i].bounds()); return r }
+    private fun moveUnit(u: List<VObj>, dx: Float, dy: Float) { if (dx == 0f && dy == 0f) return; val m = Matrix().apply { setTranslate(dx, dy) }; u.forEach { it.transform(m) } }
+
+    /** mode: 0 left, 1 centre horizontally, 2 right, 3 top, 4 centre vertically, 5 bottom. */
+    fun align(mode: Int, toPage: Boolean) {
+        val us = units(); if (us.isEmpty() || (!toPage && us.size < 2)) return
+        val ref = if (toPage) RectF(0f, 0f, doc.w, doc.h) else RectF(unitBounds(us[0])).also { r -> us.forEach { r.union(unitBounds(it)) } }
+        checkpoint()
+        for (u in us) {
+            val b = unitBounds(u)
+            when (mode) {
+                0 -> moveUnit(u, ref.left - b.left, 0f); 1 -> moveUnit(u, ref.centerX() - b.centerX(), 0f); 2 -> moveUnit(u, ref.right - b.right, 0f)
+                3 -> moveUnit(u, 0f, ref.top - b.top); 4 -> moveUnit(u, 0f, ref.centerY() - b.centerY()); else -> moveUnit(u, 0f, ref.bottom - b.bottom)
+            }
+        }
+        changed()
+    }
+
+    /** mode: 0 equal horizontal gaps, 1 equal vertical gaps, 2 equal horizontal centres, 3 equal vertical centres (needs 3+ objects). */
+    fun distribute(mode: Int) {
+        val us = units(); if (us.size < 3) return; checkpoint()
+        val horiz = mode == 0 || mode == 2; val gaps = mode < 2
+        val sorted = us.sortedBy { val b = unitBounds(it); if (horiz) b.centerX() else b.centerY() }
+        val bs = sorted.map { unitBounds(it) }
+        if (gaps) {
+            val first = if (horiz) bs.first().left else bs.first().top; val last = if (horiz) bs.last().right else bs.last().bottom
+            var total = 0f; bs.forEach { total += if (horiz) it.width() else it.height() }
+            val gap = (last - first - total) / (sorted.size - 1); var pos = first
+            for ((i, u) in sorted.withIndex()) {
+                val b = bs[i]; val size = if (horiz) b.width() else b.height()
+                if (horiz) moveUnit(u, pos - b.left, 0f) else moveUnit(u, 0f, pos - b.top)
+                pos += size + gap
+            }
+        } else {
+            val c0 = if (horiz) bs.first().centerX() else bs.first().centerY(); val c1 = if (horiz) bs.last().centerX() else bs.last().centerY()
+            for ((i, u) in sorted.withIndex()) {
+                val b = bs[i]; val target = c0 + (c1 - c0) * i / (sorted.size - 1); val cur = if (horiz) b.centerX() else b.centerY()
+                if (horiz) moveUnit(u, target - cur, 0f) else moveUnit(u, 0f, target - cur)
+            }
+        }
+        changed()
+    }
+
+    // ---------- combine / break apart / shape operations ----------
+    /** Replace [old] by [new] at the position of the back-most old object and select the new ones. */
+    private fun replace(old: List<VObj>, new: List<VObj>) {
+        val at = old.minOf { doc.objs.indexOf(it) }
+        doc.objs.removeAll(old.toSet()); doc.objs.addAll(at.coerceIn(0, doc.objs.size), new)
+        sel.clear(); sel.addAll(new); selNode = -1; changed()
+    }
+
+    /** Combine: the back-most shape keeps its style, the others become extra contours (overlaps turn into holes, even-odd). */
+    fun combine() {
+        val items = doc.objs.filter { it in sel && it.kind == Kind.PATH && it.nodes.size >= 2 }
+        if (items.size < 2) return; checkpoint()
+        val base = items.first().copy(); base.group = 0
+        for (o in items.drop(1)) { base.holes.add(SubPath(o.nodes.map { it.copy() }.toMutableList(), o.closed)); o.holes.forEach { base.holes.add(it.copy()) } }
+        if (base.fill == null) base.fill = style.fill
+        replace(items, listOf(base))
+    }
+
+    fun breakApart() {
+        val items = doc.objs.filter { it in sel && it.kind == Kind.PATH && it.holes.isNotEmpty() }; if (items.isEmpty()) return
+        checkpoint(); val made = ArrayList<VObj>()
+        for (o in items) {
+            val main = o.copy(); main.holes = mutableListOf(); main.group = 0; made.add(main)
+            for (h in o.holes) { val p = o.copy(); p.holes = mutableListOf(); p.group = 0; p.nodes = h.nodes.map { it.copy() }.toMutableList(); p.closed = h.closed; made.add(p) }
+        }
+        replace(items, made)
+    }
+
+    private fun closedSel(): List<VObj> = doc.objs.filter { it in sel && it.kind == Kind.PATH && it.closed && it.nodes.size >= 3 }
+
+    /** Turns a boolean result into shapes: outer contours become shapes, contours nested one level deeper become their holes. */
+    private fun polysToObjs(res: Path, proto: VObj): List<VObj> {
+        val pm = PathMeasure(res, false); val polys = ArrayList<List<PointF>>()
+        do {
+            val len = pm.length; if (len < 0.3f) continue
+            val n = max(12, min(2500, (len / 0.25f).toInt())); val pos = FloatArray(2)
+            val pts = List(n) { k -> pm.getPosTan(len * k / n, pos, null); PointF(pos[0], pos[1]) }
+            val s = Geo.rdp(pts, 0.02f); if (s.size >= 3) polys.add(s)
+        } while (pm.nextContour())
+        if (polys.isEmpty()) return emptyList()
+        fun area(p: List<PointF>): Float { var a = 0f; for (i in p.indices) { val q = p[(i + 1) % p.size]; a += p[i].x * q.y - q.x * p[i].y }; return abs(a) / 2f }
+        val depth = IntArray(polys.size) { i -> polys.indices.count { j -> j != i && Geo.inPoly(polys[j], polys[i][0].x, polys[i][0].y) } }
+        val outers = polys.indices.filter { depth[it] % 2 == 0 }
+        val made = HashMap<Int, VObj>()
+        for (i in outers) made[i] = proto.copy().also { o ->
+            o.nodes = polys[i].map { Node(it.x, it.y) }.toMutableList(); o.closed = true; o.holes = mutableListOf(); o.group = 0
+            o.mesh = null; o.meshPos = null; o.meshH = null
+        }
+        for (h in polys.indices.filter { depth[it] % 2 == 1 }) {
+            val owner = outers.filter { depth[it] == depth[h] - 1 && Geo.inPoly(polys[it], polys[h][0].x, polys[h][0].y) }.minByOrNull { area(polys[it]) } ?: continue
+            made[owner]?.holes?.add(SubPath(polys[h].map { Node(it.x, it.y) }.toMutableList(), true))
+        }
+        return outers.mapNotNull { made[it] }
+    }
+
+    private fun boolAll(op: Path.Op) {
+        val items = closedSel(); if (items.size < 2) return
+        var acc = Path(items[0].path())
+        for (o in items.drop(1)) { val r = Path(); if (!r.op(acc, o.path(), op)) return; acc = r }
+        val made = polysToObjs(acc, items.first())
+        checkpoint(); if (made.isEmpty()) { doc.objs.removeAll(items.toSet()); sel.clear(); changed() } else replace(items, made)
+    }
+
+    /** Weld: merge all selected shapes into one outline (style of the back-most shape). */
+    fun weld() = boolAll(Path.Op.UNION)
+    /** Intersect: keep only the area shared by all selected shapes. */
+    fun intersect() = boolAll(Path.Op.INTERSECT)
+    /** Exclude: keep the areas covered by an odd number of shapes (overlaps become holes). */
+    fun exclude() = boolAll(Path.Op.XOR)
+
+    /** Trim: the front-most selected shape cuts away its overlap from the others; keepCutter = false also removes it. */
+    fun trim(keepCutter: Boolean) {
+        val items = closedSel(); if (items.size < 2) return
+        val cutter = items.last(); val targets = items.dropLast(1); val made = ArrayList<VObj>()
+        for (t in targets) { val r = Path(); if (r.op(t.path(), cutter.path(), Path.Op.DIFFERENCE)) made.addAll(polysToObjs(r, t)) }
+        checkpoint()
+        val old = if (keepCutter) targets else items
+        if (made.isEmpty()) { doc.objs.removeAll(old.toSet()); sel.clear(); changed() } else replace(old, made)
+    }
+
     fun selectAll() { sel.clear(); sel.addAll(doc.objs.filter { pickable(it) }); changed() }
     fun matrixSel(build: (RectF) -> Matrix) { val b = selBounds() ?: return; checkpoint(); transformSel(build(b)); changed() }
     fun flipH() = matrixSel { Matrix().apply { setScale(-1f, 1f, it.centerX(), it.centerY()) } }
@@ -829,7 +1001,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
             val piece2 = mutableListOf(p2); for (k in (j2 + 1) until m) piece2.add(pts[k]); for (k in 0..j1) piece2.add(pts[k]); piece2.add(p1)
             val at = doc.objs.indexOf(o); doc.objs.remove(o)
             for ((ci, pc) in listOf(piece1, piece2).withIndex()) {
-                val c = o.copy(); c.closed = true; c.nodes = Geo.rdp(pc, 0.03f).map { Node(it.x, it.y) }.toMutableList()
+                val c = o.copy(); c.holes = mutableListOf(); c.closed = true; c.nodes = Geo.rdp(pc, 0.03f).map { Node(it.x, it.y) }.toMutableList()
                 doc.objs.add(at + ci, c); newSel.add(c)
             }
         }
@@ -863,15 +1035,14 @@ class VecCanvas(ctx: Context) : View(ctx) {
     private fun envDrag(p: PointF) {
         val q = envQ ?: return; if (envCorner < 0) return
         q[envCorner * 2] = p.x; q[envCorner * 2 + 1] = p.y
-        for ((k, o) in envSel.withIndex()) {
-            o.nodes = envOrig[k].nodes.map { n ->
-                val c = n.copy()
-                envMap(n.x, n.y).let { c.x = it.x; c.y = it.y }
-                envMap(n.ix, n.iy).let { c.ix = it.x; c.iy = it.y }
-                envMap(n.ox, n.oy).let { c.ox = it.x; c.oy = it.y }
-                c
-            }.toMutableList()
-        }
+        fun warp(list: List<Node>) = list.map { n ->
+            val c = n.copy()
+            envMap(n.x, n.y).let { c.x = it.x; c.y = it.y }
+            envMap(n.ix, n.iy).let { c.ix = it.x; c.iy = it.y }
+            envMap(n.ox, n.oy).let { c.ox = it.x; c.oy = it.y }
+            c
+        }.toMutableList()
+        for ((k, o) in envSel.withIndex()) { o.nodes = warp(envOrig[k].nodes); o.holes = envOrig[k].holes.map { SubPath(warp(it.nodes), it.closed) }.toMutableList() }
     }
 
     // ---------- effects ----------
@@ -897,7 +1068,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
                 val len = pm.length; if (len <= 0.5f) continue
                 val n = max(8, min(1500, (len / 0.25f).toInt())); val pos = FloatArray(2)
                 val pts = List(n) { k -> pm.getPosTan(len * k / n, pos, null); PointF(pos[0], pos[1]) }
-                val c = o.copy(); c.shadow = false; c.mesh = null; c.meshPos = null; c.meshH = null; c.fill2 = null; c.tMode = 0
+                val c = o.copy(); c.shadow = false; c.group = 0; c.mesh = null; c.meshPos = null; c.meshH = null; c.fill2 = null; c.tMode = 0; c.holes = mutableListOf()
                 c.nodes = Geo.rdp(pts, 0.02f).map { Node(it.x, it.y) }.toMutableList(); c.closed = true
                 c.fill = o.fill?.let { Render.mix(it, Color.WHITE, t * 0.7f) }
                 made.add(c); got = true
@@ -921,7 +1092,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
         for (k in 1..steps) {
             val t = k.toFloat() / (steps + 1)
             val pts = List(n) { i -> val p = at(pa, i); val q = at(pb, i); PointF(p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t) }
-            val o = a.copy(); o.shadow = false; o.closed = both
+            val o = a.copy(); o.shadow = false; o.group = 0; o.holes = mutableListOf(); o.closed = both
             o.nodes = Geo.smooth(Geo.rdp(pts, 0.05f).let { if (it.size < 3) pts else it }, both)
             val fa = a.fill; val fb = b.fill; o.fill = if (fa != null && fb != null) lerpColor(fa, fb, t) else fa
             val sa = a.stroke; val sb2 = b.stroke; o.stroke = if (sa != null && sb2 != null) lerpColor(sa, sb2, t) else sa
@@ -937,7 +1108,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
         val at = doc.objs.indexOf(o); val made = mutableListOf<VObj>(); val d = (depthPct / 100f).coerceIn(0.02f, 0.95f)
         for (i in steps downTo 1) {
             val f = i.toFloat() / steps; val s = 1f - d * f
-            val c = o.copy(); c.shadow = false; c.transform(Matrix().apply { setScale(s, s, vx, vy) }); c.fRot = o.fRot
+            val c = o.copy(); c.shadow = false; c.group = 0; c.transform(Matrix().apply { setScale(s, s, vx, vy) }); c.fRot = o.fRot
             val shade = 0.25f + 0.35f * f
             c.fill = o.fill?.let { lerpColor(it, Color.BLACK, shade) }; c.fill2 = null; c.mesh = null
             c.stroke = o.stroke?.let { lerpColor(it, Color.BLACK, shade) }; made.add(c)
@@ -951,7 +1122,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
         val at = doc.objs.indexOf(o); val a = Math.toRadians(angleDeg.toDouble()); val made = mutableListOf<VObj>()
         for (i in steps downTo 1) {
             val f = i.toFloat() / steps
-            val c = o.copy(); c.shadow = false
+            val c = o.copy(); c.shadow = false; c.group = 0
             c.transform(Matrix().apply { setTranslate((cos(a) * depth * f).toFloat(), (sin(a) * depth * f).toFloat()) })
             val shade = 0.25f + 0.35f * f
             c.fill = o.fill?.let { lerpColor(it, Color.BLACK, shade) }; c.fill2 = null

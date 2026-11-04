@@ -924,9 +924,9 @@ class MainActivity : AppCompatActivity() {
                     or.addView(chip(if (o.visible) "👁" else "—") { o.visible = !o.visible; cv.changed() })
                     or.addView(chip(if (o.locked) "🔒" else "🔓") { o.locked = !o.locked; cv.changed() })
                     or.addView(TextView(this).apply {
-                        text = "${o.kind.name.lowercase()} #${i + 1}${if (o.kind == Kind.TEXT) " “" + o.text.take(10) + "”" else ""}"
+                        text = "${o.kind.name.lowercase()} #${i + 1}${if (o.group != 0) " ▣${o.group}" else ""}${if (o.holes.isNotEmpty()) " ◌" else ""}${if (o.kind == Kind.TEXT) " “" + o.text.take(10) + "”" else ""}"
                         setTextColor(if (o in cv.sel) GOLD else Color.WHITE); textSize = 12f; setPadding(dp(6), dp(5), dp(6), dp(5))
-                        setOnClickListener { if (!l.locked) { cv.sel.clear(); cv.sel.add(o); cv.changed() } }
+                        setOnClickListener { if (!l.locked) cv.selectOne(o) }
                     })
                     col.addView(or)
                 }
@@ -994,11 +994,13 @@ class MainActivity : AppCompatActivity() {
     })
 
     private fun editMenu() = menu("Edit", listOf(
-        "Undo" to { cv.undo() }, "Redo" to { cv.redo() }, "Select all" to { cv.selectAll() }, "Duplicate" to { cv.duplicate() }, "Delete" to { cv.deleteSel() },
+        "Undo" to { cv.undo() }, "Redo" to { cv.redo() }, "Copy" to { cv.copySel() }, "Cut" to { cv.cutSel() }, "Paste" to { cv.paste(false) }, "Paste in place" to { cv.paste(true) }, "Select all" to { cv.selectAll() }, "Duplicate" to { cv.duplicate() }, "Delete" to { cv.deleteSel() },
         "Edit text…" to { cv.sel.firstOrNull { it.kind == Kind.TEXT }?.let { textDialog(it, false) } },
         "Fit text to selected path" to { cv.attachTextToPath() }, "Detach text from path" to { cv.detachText() }))
 
     private fun arrangeMenu() = menu("Arrange / Transform", listOf(
+        "Group" to { cv.group() }, "Ungroup" to { cv.ungroup() }, "Combine (makes holes)" to { cv.combine() }, "Break apart" to { cv.breakApart() },
+        "Shape operations…" to { shapeOpsMenu() }, "Align…" to { alignMenu() }, "Distribute…" to { distributeMenu() },
         "Bring to front" to { cv.order(true, false) }, "Send to back" to { cv.order(false, false) },
         "Flip horizontal" to { cv.flipH() }, "Flip vertical" to { cv.flipV() }, "Rotate 90°" to { cv.rotate(90f) },
         "Rotate…" to { numDialog("Rotate", listOf("Degrees"), listOf(15f)) { cv.rotate(it[0]) } },
@@ -1040,6 +1042,27 @@ class MainActivity : AppCompatActivity() {
                 o.bold = bold.isChecked; o.italic = ital.isChecked; o.align = al.selectedItemPosition
                 cv.commitText(o, isNew)
             }.setNegativeButton("Cancel", null).show()
+    }
+
+    // ---------- align / distribute / shape operations ----------
+    private var alignToPage = false
+
+    private fun alignMenu() {
+        menu("Align to " + (if (alignToPage) "page" else "selection"), listOf(
+            (if (alignToPage) "Aligning to: page  (tap to use selection)" else "Aligning to: selection  (tap to use page)") to { alignToPage = !alignToPage; alignMenu() },
+            "Left" to { cv.align(0, alignToPage) }, "Centre horizontally" to { cv.align(1, alignToPage) }, "Right" to { cv.align(2, alignToPage) },
+            "Top" to { cv.align(3, alignToPage) }, "Centre vertically" to { cv.align(4, alignToPage) }, "Bottom" to { cv.align(5, alignToPage) }))
+    }
+
+    private fun distributeMenu() {
+        menu("Distribute (3+ objects)", listOf("Equal horizontal gaps" to { cv.distribute(0) }, "Equal vertical gaps" to { cv.distribute(1) },
+            "Equal horizontal centres" to { cv.distribute(2) }, "Equal vertical centres" to { cv.distribute(3) }))
+    }
+
+    private fun shapeOpsMenu() {
+        menu("Shape operations (closed shapes)", listOf(
+            "Weld (merge into one)" to { cv.weld() }, "Intersect (shared area)" to { cv.intersect() }, "Exclude (overlaps become holes)" to { cv.exclude() },
+            "Trim (front shape cuts the others, keep it)" to { cv.trim(true) }, "Subtract (front shape cuts, then removed)" to { cv.trim(false) }))
     }
 
     // ---------- Transparency (fountain / bitmap pattern) ----------

@@ -19,6 +19,16 @@ class Node(var x: Float, var y: Float) {
     }
 }
 
+/** An extra contour of a compound path (a hole or a separate part); the whole object is filled even-odd. */
+class SubPath(var nodes: MutableList<Node>, var closed: Boolean = true) {
+    fun copy() = SubPath(nodes.map { it.copy() }.toMutableList(), closed)
+}
+
+private fun nodeToJson(n: Node) = JSONArray(listOf(n.x, n.y, n.ix, n.iy, n.ox, n.oy, if (n.smooth) 1f else 0f).map { it.toDouble() })
+private fun nodeFromJson(a: JSONArray): Node = Node(a.getDouble(0).toFloat(), a.getDouble(1).toFloat()).also {
+    it.ix = a.getDouble(2).toFloat(); it.iy = a.getDouble(3).toFloat(); it.ox = a.getDouble(4).toFloat(); it.oy = a.getDouble(5).toFloat(); it.smooth = a.getDouble(6) > 0.5
+}
+
 enum class Kind { PATH, TEXT, IMAGE }
 
 class Layer(var name: String, var visible: Boolean = true, var locked: Boolean = false, var opacity: Float = 1f)
@@ -27,6 +37,8 @@ class Layer(var name: String, var visible: Boolean = true, var locked: Boolean =
 class VObj(var kind: Kind = Kind.PATH) {
     var nodes = mutableListOf<Node>()
     var closed = false
+    var holes = mutableListOf<SubPath>()   // extra contours (holes / compound parts), filled even-odd
+    var group = 0                          // objects sharing a non-zero id select and move together
     var fill: Int? = 0xFF3A86FF.toInt()
     var fill2: Int? = null          // gradient end colour (null = uniform fill)
     var gradAngle = 0f
@@ -58,14 +70,19 @@ class VObj(var kind: Kind = Kind.PATH) {
     var bmp: Bitmap? = null
     var rect = RectF()
 
-    fun path(): Path {
-        val p = Path(); val n = nodes.size; if (n == 0) return p
-        p.moveTo(nodes[0].x, nodes[0].y)
+    private fun addContour(p: Path, ns: List<Node>, closed: Boolean) {
+        val n = ns.size; if (n == 0) return
+        p.moveTo(ns[0].x, ns[0].y)
         for (i in 0 until (if (closed) n else n - 1)) {
-            val a = nodes[i]; val b = nodes[(i + 1) % n]
+            val a = ns[i]; val b = ns[(i + 1) % n]
             if (a.outLine() && b.inLine()) p.lineTo(b.x, b.y) else p.cubicTo(a.ox, a.oy, b.ix, b.iy, b.x, b.y)
         }
         if (closed) p.close()
+    }
+
+    fun path(): Path {
+        val p = Path(); addContour(p, nodes, closed)
+        if (holes.isNotEmpty()) { for (h in holes) addContour(p, h.nodes, h.closed); p.fillType = Path.FillType.EVEN_ODD }
         return p
     }
 
@@ -110,6 +127,7 @@ class VObj(var kind: Kind = Kind.PATH) {
 
     fun transform(m: Matrix) {
         nodes.forEach { it.map(m) }
+        holes.forEach { h -> h.nodes.forEach { it.map(m) } }
         if (kind == Kind.TEXT) {
             val p = floatArrayOf(tx, ty); m.mapPoints(p); tx = p[0]; ty = p[1]
             val s = m.mapRadius(1f); size *= s; frameW *= s
@@ -127,6 +145,7 @@ class VObj(var kind: Kind = Kind.PATH) {
 
     fun copy(): VObj = VObj(kind).also { o ->
         o.nodes = nodes.map { it.copy() }.toMutableList(); o.closed = closed
+        o.holes = holes.map { it.copy() }.toMutableList(); o.group = group
         o.fill = fill; o.fill2 = fill2; o.gradAngle = gradAngle; o.stroke = stroke; o.strokeW = strokeW
         o.cap = cap; o.join = join; o.dash = dash; o.arrow = arrow; o.alpha = alpha; o.shadow = shadow
         o.layer = layer; o.visible = visible; o.locked = locked
@@ -145,6 +164,8 @@ class VObj(var kind: Kind = Kind.PATH) {
         put("n", JSONArray().also { arr ->
             nodes.forEach { n -> arr.put(JSONArray(listOf(n.x, n.y, n.ix, n.iy, n.ox, n.oy, if (n.smooth) 1f else 0f).map { it.toDouble() })) }
         })
+        if (group != 0) put("gr", group)
+        if (holes.isNotEmpty()) put("holes", JSONArray().also { ha -> holes.forEach { h -> ha.put(JSONObject().put("c", h.closed).put("n", JSONArray().also { arr -> h.nodes.forEach { arr.put(nodeToJson(it)) } })) } })
         if (fRot != 0f) put("fr", fRot.toDouble())
         if (tMode != 0) {
             put("tm", tMode); put("ta1", tA1.toDouble()); put("ta2", tA2.toDouble()); put("tang", tAngle.toDouble()); put("tpat", tPat); put("ttile", tTile.toDouble())
@@ -179,6 +200,14 @@ class VObj(var kind: Kind = Kind.PATH) {
                 val n = Node(a.getDouble(0).toFloat(), a.getDouble(1).toFloat())
                 n.ix = a.getDouble(2).toFloat(); n.iy = a.getDouble(3).toFloat(); n.ox = a.getDouble(4).toFloat(); n.oy = a.getDouble(5).toFloat()
                 n.smooth = a.getDouble(6) > 0.5; o.nodes.add(n)
+            }
+            o.group = j.optInt("gr")
+            j.optJSONArray("holes")?.let { ha ->
+                for (hi in 0 until ha.length()) {
+                    val ho = ha.getJSONObject(hi); val arr = ho.getJSONArray("n"); val ns = mutableListOf<Node>()
+                    for (i in 0 until arr.length()) ns.add(nodeFromJson(arr.getJSONArray(i)))
+                    o.holes.add(SubPath(ns, ho.optBoolean("c", true)))
+                }
             }
             o.fRot = j.optDouble("fr", 0.0).toFloat()
             o.tMode = j.optInt("tm")

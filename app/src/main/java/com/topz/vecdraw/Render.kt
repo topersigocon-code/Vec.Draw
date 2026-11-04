@@ -240,15 +240,21 @@ object Export {
     private fun hex(c: Int) = String.format("#%06X", c and 0xFFFFFF)
     private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
-    private fun pathData(o: VObj): String {
-        val n = o.nodes; if (n.isEmpty()) return ""
+    private fun contourData(n: List<Node>, closed: Boolean): String {
+        if (n.isEmpty()) return ""
         val sb = StringBuilder("M${f(n[0].x)} ${f(n[0].y)}")
-        for (i in 0 until (if (o.closed) n.size else n.size - 1)) {
+        for (i in 0 until (if (closed) n.size else n.size - 1)) {
             val a = n[i]; val b = n[(i + 1) % n.size]
             if (a.outLine() && b.inLine()) sb.append("L${f(b.x)} ${f(b.y)}")
             else sb.append("C${f(a.ox)} ${f(a.oy)} ${f(b.ix)} ${f(b.iy)} ${f(b.x)} ${f(b.y)}")
         }
-        if (o.closed) sb.append("Z")
+        if (closed) sb.append("Z")
+        return sb.toString()
+    }
+
+    private fun pathData(o: VObj): String {
+        val sb = StringBuilder(contourData(o.nodes, o.closed))
+        for (h in o.holes) sb.append(contourData(h.nodes, h.closed))
         return sb.toString()
     }
 
@@ -262,7 +268,7 @@ object Export {
     }
 
     private fun meshSvg(o: VObj, d: String, id: Int, op: Float): String {
-        val sb = StringBuilder("<defs><clipPath id=\"mc$id\"><path d=\"$d\"/></clipPath></defs>\n<g clip-path=\"url(#mc$id)\"${if (op < 0.999f) " opacity=\"${f(op)}\"" else ""}>\n")
+        val sb = StringBuilder("<defs><clipPath id=\"mc$id\"><path d=\"$d\" clip-rule=\"evenodd\"/></clipPath></defs>\n<g clip-path=\"url(#mc$id)\"${if (op < 0.999f) " opacity=\"${f(op)}\"" else ""}>\n")
         for (c in Render.meshCells(o)) {
             val h = hex(c.color)
             val pts = (0 until 4).joinToString(" ") { "${f(c.p[it * 2])},${f(c.p[it * 2 + 1])}" }
@@ -286,7 +292,7 @@ object Export {
                     fillRef = "url(#g$id)"
                 } else if (f1 != null) fillRef = hex(f1)
                 val fo = if (f1 != null && op < 0.999f && o.stroke == null) " opacity=\"${f(op)}\"" else ""
-                sb.append("<path d=\"$d\" fill=\"$fillRef\"${strokeAttrs(o, op)}$fo/>\n")
+                sb.append("<path d=\"$d\" fill=\"$fillRef\"${if (o.holes.isNotEmpty()) " fill-rule=\"evenodd\"" else ""}${strokeAttrs(o, op)}$fo/>\n")
                 Render.arrowPts(o)?.let { a -> sb.append("<path d=\"M${f(a[0])} ${f(a[1])}L${f(a[2])} ${f(a[3])}L${f(a[4])} ${f(a[5])}Z\" fill=\"${hex(o.stroke ?: 0)}\"/>\n") }
             }
             Kind.TEXT -> {
