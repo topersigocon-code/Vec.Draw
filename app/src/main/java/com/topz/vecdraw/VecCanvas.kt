@@ -34,6 +34,7 @@ enum class Tool(val label: String, val icon: String) {
     TEXT("Text", "M5 7V5h14v2 M12 5v14 M9 19h6"),
     EYE("Eyedropper", "M15 4l5 5-2.5 2.5-5-5z|M12 7.5L4.5 15v4.5H9l7.5-7.5|~M4.5 15L9 19.5H4.5z"),
     FILL("Interactive fill", "~M7 11l5-6 7 7-6 6z|M7 11l5-6 7 7-6 6z|M19 15c1.2 1.8 2 3 2 4a2 2 0 0 1-4 0c0-1 .8-2.2 2-4"),
+    LASSO("Lasso fill", "~M6 10C6 5 14 4 18 8S19 17 12 18 5 14 6 10z|M6 10C6 5 14 4 18 8S19 17 12 18 5 14 6 10z|M9 18c-1 2-3 2-3 4"),
     MESH("Mesh fill", "~M4 4h16v16H4z|M4 4h16v16H4z|M4 12c4-2 8 2 16 0 M12 4c-2 4 2 8 0 16|@M10.5 10.5h3v3h-3z"),
     TRANS("Transparency", "~M12 3C12 3 5 11 5 15a7 7 0 0 0 14 0C19 11 12 3 12 3z|M12 3C12 3 5 11 5 15a7 7 0 0 0 14 0C19 11 12 3 12 3z|M12 19a4 4 0 0 1-4-4")
 }
@@ -42,7 +43,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     companion object {
         const val M_NONE = 0; const val M_PAN = 1; const val M_MOVE = 2; const val M_SCALE = 3; const val M_ROT = 4
         const val M_MARQ = 5; const val M_NODE = 6; const val M_HIN = 7; const val M_HOUT = 8; const val M_SHAPE = 9
-        const val M_SHAPE3 = 10; const val M_PEN = 11; const val M_FH = 12; const val M_ENV = 13; const val M_MESHV = 14; const val M_MESHH = 15; const val M_GUIDE = 16
+        const val M_SHAPE3 = 10; const val M_PEN = 11; const val M_FH = 12; const val M_ENV = 13; const val M_MESHV = 14; const val M_MESHH = 15; const val M_GUIDE = 16; const val M_LASSO = 17
         var clip: List<VObj> = emptyList(); var pasteCount = 0
     }
 
@@ -62,6 +63,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     var freehandEps = 2f; var undoLimit = 60
     var handleScale = 1f   // size of touch handles / hit areas
     var showRulers = true; var tapGestures = true
+    var lassoMode = 2   // 0 = inside shapes only, 1 = gaps outside shapes only, 2 = anywhere
     private var guideAxis = 0; private var guideIdx = -1; private var guideVal = 0f      // axis 0 = vertical guide (x), 1 = horizontal (y)
     private var maxPtr = 0; private var tapT = 0L; private var tapX = 0f; private var tapY = 0f; private var tapMoved = false; private var gestureScaled = false
     private val rulerPx: Float get() = if (showRulers) 22f * resources.displayMetrics.density else 0f
@@ -151,6 +153,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     fun copyStyle(s: VObj, d: VObj) {
         d.fill = s.fill; d.fill2 = s.fill2; d.gradAngle = s.gradAngle; d.stroke = s.stroke; d.strokeW = s.strokeW
         d.cap = s.cap; d.join = s.join; d.dash = s.dash; d.arrow = s.arrow; d.alpha = s.alpha; d.shadow = s.shadow
+        d.gradType = s.gradType; d.fillMid = s.fillMid
     }
     private fun newObj() = VObj().also { copyStyle(style, it); it.layer = activeLayer.coerceIn(0, doc.layers.lastIndex) }
     private fun commitNew(o: VObj) { checkpoint(); doc.objs.add(o); sel.clear(); sel.add(o); selNode = -1; changed() }
@@ -272,6 +275,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
 
     private fun preview(): Path? = when {
         p3 == 1 -> build3(cx, cy)?.path()
+        mode == M_LASSO && fh.size > 1 -> Path().apply { moveTo(fh[0].x, fh[0].y); for (i in 1 until fh.size) lineTo(fh[i].x, fh[i].y); close() }
         mode == M_FH && fh.size > 1 -> Path().apply { moveTo(fh[0].x, fh[0].y); for (i in 1 until fh.size) lineTo(fh[i].x, fh[i].y) }
         mode == M_SHAPE && (tool == Tool.CROP || tool == Tool.TEXT) -> Path().apply { addRect(min(sx0, cx), min(sy0, cy), max(sx0, cx), max(sy0, cy), Path.Direction.CW) }
         mode == M_SHAPE && (tool == Tool.FILL || tool == Tool.TRANS || tool == Tool.KNIFE || tool == Tool.RECT3 || tool == Tool.ELLIPSE3) -> Path().apply { moveTo(sx0, sy0); lineTo(cx, cy) }
@@ -392,6 +396,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
             Tool.NODE -> nodeDown(x, y)
             Tool.PEN, Tool.BEZIER, Tool.POLYLINE, Tool.BSPLINE -> penDown(p)
             Tool.FREEHAND, Tool.SMART -> { fh.clear(); fh.add(PointF(ox0, oy0)); mode = M_FH }
+            Tool.LASSO -> { fh.clear(); fh.add(PointF(ox0, oy0)); mode = M_LASSO }
             Tool.RECT3, Tool.ELLIPSE3 -> mode = if (p3 == 1) M_SHAPE3 else M_SHAPE
             Tool.TEXT -> {
                 val h = topHit(ox0, oy0)
@@ -430,6 +435,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
             M_MESHH -> if (moved) { ensureCk(); meshHandleDrag(rx, ry) }
             M_GUIDE -> guideVal = if (guideAxis == 1) ry else rx
             M_FH -> fh.add(PointF(rx, ry))
+            M_LASSO -> fh.add(PointF(rx, ry))
         }
         pdx = rx; pdy = ry; cx = p.x; cy = p.y; lx = x; ly = y
         invalidate(); status("%.1f, %.1f".format(rx, ry))
@@ -447,6 +453,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
             M_SHAPE -> shapeUp()
             M_SHAPE3 -> { build3(cx, cy)?.let { commitNew(it) }; p3 = 0 }
             M_FH -> finishFreehand()
+            M_LASSO -> if (moved) finishLasso() else smartFill(ox0, oy0)
         }
         mode = M_NONE; gCk = false; fh.clear(); invalidate(); onChange()
     }
@@ -1015,6 +1022,77 @@ class VecCanvas(ctx: Context) : View(ctx) {
     fun transPattern(idx: Int, a1: Float, a2: Float, tile: Float) = editSel { it.tMode = 2; it.tPat = idx; it.tA1 = a1.coerceIn(0f, 1f); it.tA2 = a2.coerceIn(0f, 1f); it.tTile = max(tile, 0.5f) }
     fun transPatternImage(bmp: Bitmap, a1: Float, a2: Float, tile: Float) = editSel { it.tMode = 2; it.tPat = -1; it.tBmp = bmp; it.tA1 = a1.coerceIn(0f, 1f); it.tA2 = a2.coerceIn(0f, 1f); it.tTile = max(tile, 0.5f) }
     fun transClear() = editSel { it.tMode = 0 }
+
+    // ---------- Lasso fill: tap a region to fill it, or drag a loop ----------
+    private fun unionOf(list: List<VObj>): Path? {
+        if (list.isEmpty()) return null
+        var acc = Path(list[0].path())
+        for (o in list.drop(1)) { val r = Path(); if (!r.op(acc, o.path(), Path.Op.UNION)) return null; acc = r }
+        return acc
+    }
+
+    private fun containsPt(o: VObj, x: Float, y: Float): Boolean {
+        val sp = Path(); o.path().transform(Matrix().apply { setScale(100f, 100f) }, sp)
+        val rg = Region(); rg.setPath(sp, Region(-400000, -400000, 400000, 400000))
+        return rg.contains((x * 100).toInt(), (y * 100).toInt())
+    }
+
+    private fun lassoProto(): VObj = newObj().also { it.stroke = null; if (it.fill == null) it.fill = 0xFF3A86FF.toInt() }
+
+    private fun addFills(made: List<VObj>) {
+        if (made.isEmpty()) return
+        checkpoint(); made.forEach { it.layer = activeLayer.coerceIn(0, doc.layers.lastIndex); doc.objs.add(it) }
+        sel.clear(); sel.addAll(made); selNode = -1; changed()
+    }
+
+    /** Drag a loop: fills it (mode 2), only where shapes are (mode 0) or only the gaps between shapes (mode 1). */
+    private fun finishLasso() {
+        if (fh.size < 4) return
+        val pts = Geo.rdp(fh, freehandEps / scale); if (pts.size < 3) return
+        if (lassoMode == 2) { val o = lassoProto(); o.closed = true; o.nodes = Geo.smooth(pts, true); addFills(listOf(o)); return }
+        val lasso = Path().apply { moveTo(pts[0].x, pts[0].y); for (i in 1 until pts.size) lineTo(pts[i].x, pts[i].y); close() }
+        val u = unionOf(doc.objs.filter { pickable(it) && it.kind == Kind.PATH && it.closed && it.nodes.size >= 3 })
+        val res = Path()
+        val ok = if (lassoMode == 0) { if (u == null) return; res.op(lasso, u, Path.Op.INTERSECT) }
+            else { if (u == null) { res.set(lasso); true } else res.op(lasso, u, Path.Op.DIFFERENCE) }
+        if (ok) addFills(polysToObjs(res, lassoProto()))
+    }
+
+    /** Tap: fill the region (face) under the finger that is bounded by the outlines of the overlapping closed shapes. */
+    private fun smartFill(x: Float, y: Float) {
+        val shapes = doc.objs.filter { pickable(it) && it.kind == Kind.PATH && it.closed && it.nodes.size >= 3 }
+        val inside = shapes.filter { containsPt(it, x, y) }
+        if (inside.isEmpty()) { status("No closed shape here"); return }
+        var face = Path(inside[0].path())
+        for (s in inside.drop(1)) { val r = Path(); if (!r.op(face, s.path(), Path.Op.INTERSECT)) return; face = r }
+        unionOf(shapes.filter { it !in inside })?.let { u -> val r = Path(); if (r.op(face, u, Path.Op.DIFFERENCE)) face = r }
+        val made = polysToObjs(face, lassoProto()).filter { containsPt(it, x, y) }
+        if (made.isEmpty()) { status("No region found"); return }
+        addFills(listOf(made[0]))
+    }
+
+    /** Convert the selected text into shapes (glyph outlines become fine polylines; counters become real holes). */
+    fun textToCurves(): Boolean {
+        val texts = doc.objs.filter { it in sel && it.kind == Kind.TEXT && !it.onPath && it.text.isNotBlank() }
+        if (texts.isEmpty()) return false
+        checkpoint(); val newSel = ArrayList<VObj>(); var next = (doc.objs.maxOfOrNull { it.group } ?: 0) + 1
+        for (t in texts) {
+            val pt = t.textPaint().apply { textAlign = Paint.Align.LEFT }
+            val w = t.textW(); val all = Path()
+            t.lines().forEachIndexed { i, s ->
+                val lw = pt.measureText(s)
+                val x = when (t.align) { 1 -> t.tx + (w - lw) / 2; 2 -> t.tx + w - lw; else -> t.tx }
+                val tp = Path(); pt.getTextPath(s, 0, s.length, x, t.ty + i * t.size * t.leading, tp); all.addPath(tp)
+            }
+            if (t.tRot != 0f) all.transform(Matrix().apply { setRotate(t.tRot, t.tx, t.ty) })
+            val proto = t.copy().also { it.kind = Kind.PATH; it.text = ""; it.holes = mutableListOf(); it.stroke = null; it.group = 0; it.tRot = 0f; it.onPath = false }
+            val made = polysToObjs(all, proto); if (made.isEmpty()) continue
+            if (made.size > 1) { made.forEach { it.group = next }; next++ }
+            val at = doc.objs.indexOf(t); doc.objs.removeAt(at); doc.objs.addAll(at, made); newSel.addAll(made)
+        }
+        sel.clear(); sel.addAll(newSel); selNode = -1; changed()
+        return true
+    }
 
     // ---------- Mesh fill ----------
     private fun meshObj(): VObj? = sel.firstOrNull { it.kind == Kind.PATH && it.closed }

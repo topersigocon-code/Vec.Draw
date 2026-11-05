@@ -32,7 +32,13 @@ object Render {
         return Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL; color = f
             val f2 = o.fill2
-            if (f2 != null) { val g = gradPts(o); shader = LinearGradient(g[0], g[1], g[2], g[3], f, f2, Shader.TileMode.CLAMP) }
+            if (f2 != null) {
+                val g = gradPts(o); val mid = o.fillMid
+                val cols = if (mid != null) intArrayOf(f, mid, f2) else intArrayOf(f, f2)
+                val pos = if (mid != null) floatArrayOf(0f, 0.5f, 1f) else floatArrayOf(0f, 1f)
+                shader = if (o.gradType == 1) RadialGradient((g[0] + g[2]) / 2, (g[1] + g[3]) / 2, max(hypot(g[2] - g[0], g[3] - g[1]) / 2, 0.01f), cols, pos, Shader.TileMode.CLAMP)
+                else LinearGradient(g[0], g[1], g[2], g[3], cols, pos, Shader.TileMode.CLAMP)
+            }
             alpha = a255(o, la)
         }
     }
@@ -221,9 +227,16 @@ object Render {
             Kind.TEXT -> {
                 val pt = o.textPaint().apply { color = o.fill ?: Color.BLACK; alpha = a255(o, la) }
                 if (o.onPath) c.drawTextOnPath(o.text.replace("\n", " "), o.path(), 0f, 0f, pt)
-                else { val x = o.textX(o.textW()); o.lines().forEachIndexed { i, s -> c.drawText(s, x, o.ty + i * o.size * o.leading, pt) } }
+                else {
+                    c.save(); if (o.tRot != 0f) c.rotate(o.tRot, o.tx, o.ty)
+                    val x = o.textX(o.textW()); o.lines().forEachIndexed { i, s -> c.drawText(s, x, o.ty + i * o.size * o.leading, pt) }
+                    c.restore()
+                }
             }
-            Kind.IMAGE -> o.bmp?.let { c.drawBitmap(it, null, o.rect, Paint(Paint.FILTER_BITMAP_FLAG).apply { alpha = a255(o, la) }) }
+            Kind.IMAGE -> o.bmp?.let {
+                c.save(); if (o.tRot != 0f) c.rotate(o.tRot, o.rect.centerX(), o.rect.centerY())
+                c.drawBitmap(it, null, o.rect, Paint(Paint.FILTER_BITMAP_FLAG).apply { alpha = a255(o, la) }); c.restore()
+            }
         }
     }
 
@@ -287,8 +300,10 @@ object Export {
                 val f1 = o.fill; val f2 = o.fill2
                 if (o.mesh != null && o.closed) sb.append(meshSvg(o, d, id, op))
                 else if (f1 != null && f2 != null) {
-                    val g = Render.gradPts(o)
-                    sb.append("<defs><linearGradient id=\"g$id\" gradientUnits=\"userSpaceOnUse\" x1=\"${f(g[0])}\" y1=\"${f(g[1])}\" x2=\"${f(g[2])}\" y2=\"${f(g[3])}\"><stop offset=\"0\" stop-color=\"${hex(f1)}\"/><stop offset=\"1\" stop-color=\"${hex(f2)}\"/></linearGradient></defs>\n")
+                    val g = Render.gradPts(o); val mid = o.fillMid
+                    val stops = "<stop offset=\"0\" stop-color=\"${hex(f1)}\"/>" + (if (mid != null) "<stop offset=\"0.5\" stop-color=\"${hex(mid)}\"/>" else "") + "<stop offset=\"1\" stop-color=\"${hex(f2)}\"/>"
+                    if (o.gradType == 1) sb.append("<defs><radialGradient id=\"g$id\" gradientUnits=\"userSpaceOnUse\" cx=\"${f((g[0] + g[2]) / 2)}\" cy=\"${f((g[1] + g[3]) / 2)}\" r=\"${f(hypot(g[2] - g[0], g[3] - g[1]) / 2)}\">$stops</radialGradient></defs>\n")
+                    else sb.append("<defs><linearGradient id=\"g$id\" gradientUnits=\"userSpaceOnUse\" x1=\"${f(g[0])}\" y1=\"${f(g[1])}\" x2=\"${f(g[2])}\" y2=\"${f(g[3])}\">$stops</linearGradient></defs>\n")
                     fillRef = "url(#g$id)"
                 } else if (f1 != null) fillRef = hex(f1)
                 val fo = if (f1 != null && op < 0.999f && o.stroke == null) " opacity=\"${f(op)}\"" else ""
@@ -296,19 +311,20 @@ object Export {
                 Render.arrowPts(o)?.let { a -> sb.append("<path d=\"M${f(a[0])} ${f(a[1])}L${f(a[2])} ${f(a[3])}L${f(a[4])} ${f(a[5])}Z\" fill=\"${hex(o.stroke ?: 0)}\"/>\n") }
             }
             Kind.TEXT -> {
-                val common = "font-family=\"sans-serif\" font-size=\"${f(o.size)}\" fill=\"${hex(o.fill ?: 0)}\"" +
+                val common = "font-family=\"${esc(Fonts.cssFamily(o.font))}\" font-size=\"${f(o.size)}\" fill=\"${hex(o.fill ?: 0)}\"" +
                     (if (o.bold) " font-weight=\"bold\"" else "") + (if (o.italic) " font-style=\"italic\"" else "") +
                     (if (o.spacing != 0f) " letter-spacing=\"${f(o.spacing * o.size)}\"" else "") + (if (op < 0.999f) " opacity=\"${f(op)}\"" else "")
+                val rot = if (o.tRot != 0f && !o.onPath) " transform=\"rotate(${f(o.tRot)} ${f(o.tx)} ${f(o.ty)})\"" else ""
                 if (o.onPath) {
                     sb.append("<defs><path id=\"tp$id\" d=\"${pathData(o)}\"/></defs>\n<text $common><textPath xlink:href=\"#tp$id\" href=\"#tp$id\">${esc(o.text.replace("\n", " "))}</textPath></text>\n")
                 } else {
                     val anchor = arrayOf("start", "middle", "end")[o.align]; val x = o.textX(o.textW())
-                    o.lines().forEachIndexed { i, s -> sb.append("<text x=\"${f(x)}\" y=\"${f(o.ty + i * o.size * o.leading)}\" text-anchor=\"$anchor\" xml:space=\"preserve\" $common>${esc(s)}</text>\n") }
+                    o.lines().forEachIndexed { i, s -> sb.append("<text x=\"${f(x)}\" y=\"${f(o.ty + i * o.size * o.leading)}\" text-anchor=\"$anchor\" xml:space=\"preserve\" $common$rot>${esc(s)}</text>\n") }
                 }
             }
             Kind.IMAGE -> o.bmp?.let { b ->
                 val data = Base64.encodeToString(Png.bytes(b), Base64.NO_WRAP)
-                sb.append("<image x=\"${f(o.rect.left)}\" y=\"${f(o.rect.top)}\" width=\"${f(o.rect.width())}\" height=\"${f(o.rect.height())}\" preserveAspectRatio=\"none\" opacity=\"${f(op)}\" xlink:href=\"data:image/png;base64,$data\"/>\n")
+                sb.append("<image transform=\"rotate(${f(o.tRot)} ${f(o.rect.centerX())} ${f(o.rect.centerY())})\" x=\"${f(o.rect.left)}\" y=\"${f(o.rect.top)}\" width=\"${f(o.rect.width())}\" height=\"${f(o.rect.height())}\" preserveAspectRatio=\"none\" opacity=\"${f(op)}\" xlink:href=\"data:image/png;base64,$data\"/>\n")
             }
         }
         if (o.tMode == 0) return sb.toString()
@@ -342,6 +358,12 @@ object Export {
         val sb = StringBuilder()
         sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
         sb.append("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"${f(doc.w)}mm\" height=\"${f(doc.h)}mm\" viewBox=\"0 0 ${f(doc.w)} ${f(doc.h)}\">\n")
+        val fonts = doc.objs.filter { it.kind == Kind.TEXT && Fonts.isCustom(it.font) }.map { it.font }.distinct()
+        if (fonts.isNotEmpty()) {
+            sb.append("<defs><style type=\"text/css\">")
+            for (n in fonts) Fonts.fontData(n)?.let { d -> sb.append("@font-face{font-family:'${n.substringBeforeLast('.').replace("'", "")}';src:url(data:${Fonts.mime(n)};base64,$d)}") }
+            sb.append("</style></defs>\n")
+        }
         var id = 0
         for (o in doc.objs) {
             val l = doc.layers.getOrNull(o.layer) ?: continue

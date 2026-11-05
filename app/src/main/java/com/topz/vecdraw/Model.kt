@@ -64,6 +64,8 @@ class VObj(var kind: Kind = Kind.PATH) {
     // text
     var text = ""; var size = 8f; var bold = false; var italic = false
     var align = 0; var spacing = 0f; var leading = 1.2f
+    var font = ""; var tRot = 0f        // font family (built-in or imported file) / rotation of text and images (deg)
+    var gradType = 0; var fillMid: Int? = null   // 0 linear, 1 radial gradient; optional middle colour stop
     var tx = 0f; var ty = 0f; var frameW = 0f
     var onPath = false              // text follows `nodes`
     // image
@@ -88,8 +90,7 @@ class VObj(var kind: Kind = Kind.PATH) {
 
     fun textPaint() = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = size
-        typeface = Typeface.create(Typeface.SANS_SERIF, when {
-            bold && italic -> Typeface.BOLD_ITALIC; bold -> Typeface.BOLD; italic -> Typeface.ITALIC; else -> Typeface.NORMAL })
+        typeface = Fonts.typeface(font, bold, italic)
         letterSpacing = spacing
         textAlign = when (align) { 1 -> Paint.Align.CENTER; 2 -> Paint.Align.RIGHT; else -> Paint.Align.LEFT }
     }
@@ -116,11 +117,18 @@ class VObj(var kind: Kind = Kind.PATH) {
 
     private fun pathBounds(): RectF { val r = RectF(); path().computeBounds(r, true); return r }
 
+    private fun rotRect(r: RectF, px: Float, py: Float): RectF {
+        if (tRot == 0f) return r
+        val pts = floatArrayOf(r.left, r.top, r.right, r.top, r.right, r.bottom, r.left, r.bottom)
+        Matrix().apply { setRotate(tRot, px, py) }.mapPoints(pts)
+        return RectF(minOf(pts[0], pts[2], pts[4], pts[6]), minOf(pts[1], pts[3], pts[5], pts[7]), maxOf(pts[0], pts[2], pts[4], pts[6]), maxOf(pts[1], pts[3], pts[5], pts[7]))
+    }
+
     fun bounds(): RectF = when {
-        kind == Kind.IMAGE -> RectF(rect)
+        kind == Kind.IMAGE -> rotRect(RectF(rect), rect.centerX(), rect.centerY())
         kind == Kind.TEXT && !onPath -> {
             val l = lines()
-            RectF(tx, ty - size * 0.9f, tx + textW(), ty + (l.size - 1) * size * leading + size * 0.25f)
+            rotRect(RectF(tx, ty - size * 0.9f, tx + textW(), ty + (l.size - 1) * size * leading + size * 0.25f), tx, ty)
         }
         else -> pathBounds()
     }
@@ -132,14 +140,18 @@ class VObj(var kind: Kind = Kind.PATH) {
             val p = floatArrayOf(tx, ty); m.mapPoints(p); tx = p[0]; ty = p[1]
             val s = m.mapRadius(1f); size *= s; frameW *= s
         }
-        if (kind == Kind.IMAGE) m.mapRect(rect)
-        if (kind == Kind.PATH) {
-            val v = FloatArray(9); m.getValues(v)
-            val det = v[Matrix.MSCALE_X] * v[Matrix.MSCALE_Y] - v[Matrix.MSKEW_X] * v[Matrix.MSKEW_Y]
-            if (det > 0f) {   // ignore reflections
-                val ang = Math.toDegrees(Math.atan2(v[Matrix.MSKEW_Y].toDouble(), v[Matrix.MSCALE_X].toDouble())).toFloat()
-                if (Math.abs(ang) > 1e-4f) fRot = (fRot + ang) % 360f
-            }
+        val v = FloatArray(9); m.getValues(v)
+        if (kind == Kind.IMAGE) {
+            val sx = Math.hypot(v[Matrix.MSCALE_X].toDouble(), v[Matrix.MSKEW_Y].toDouble()).toFloat()
+            val sy = Math.hypot(v[Matrix.MSKEW_X].toDouble(), v[Matrix.MSCALE_Y].toDouble()).toFloat()
+            val c = floatArrayOf(rect.centerX(), rect.centerY()); m.mapPoints(c)
+            val hw = rect.width() * sx / 2; val hh = rect.height() * sy / 2
+            rect = RectF(c[0] - hw, c[1] - hh, c[0] + hw, c[1] + hh)
+        }
+        val det = v[Matrix.MSCALE_X] * v[Matrix.MSCALE_Y] - v[Matrix.MSKEW_X] * v[Matrix.MSKEW_Y]
+        if (det > 0f) {   // ignore reflections
+            val ang = Math.toDegrees(Math.atan2(v[Matrix.MSKEW_Y].toDouble(), v[Matrix.MSCALE_X].toDouble())).toFloat()
+            if (Math.abs(ang) > 1e-4f) { if (kind == Kind.PATH) fRot = (fRot + ang) % 360f else if (!onPath) tRot = (tRot + ang) % 360f }
         }
     }
 
@@ -152,6 +164,7 @@ class VObj(var kind: Kind = Kind.PATH) {
         o.text = text; o.size = size; o.bold = bold; o.italic = italic; o.align = align; o.spacing = spacing
         o.leading = leading; o.tx = tx; o.ty = ty; o.frameW = frameW; o.onPath = onPath
         o.bmp = bmp; o.rect = RectF(rect)
+        o.font = font; o.tRot = tRot; o.gradType = gradType; o.fillMid = fillMid
         o.mesh = mesh?.copyOf(); o.meshR = meshR; o.meshC = meshC; o.meshPos = meshPos?.copyOf(); o.meshH = meshH?.copyOf(); o.fRot = fRot
         o.tMode = tMode; o.tA1 = tA1; o.tA2 = tA2; o.tAngle = tAngle; o.tPat = tPat; o.tTile = tTile; o.tBmp = tBmp; o.tBaked = tBaked; o.tKey = tKey
     }
@@ -167,6 +180,10 @@ class VObj(var kind: Kind = Kind.PATH) {
         if (group != 0) put("gr", group)
         if (holes.isNotEmpty()) put("holes", JSONArray().also { ha -> holes.forEach { h -> ha.put(JSONObject().put("c", h.closed).put("n", JSONArray().also { arr -> h.nodes.forEach { arr.put(nodeToJson(it)) } })) } })
         if (fRot != 0f) put("fr", fRot.toDouble())
+        if (font.isNotEmpty()) put("fn", font)
+        if (tRot != 0f) put("trot", tRot.toDouble())
+        if (gradType != 0) put("gt", gradType)
+        fillMid?.let { put("fm", it) }
         if (tMode != 0) {
             put("tm", tMode); put("ta1", tA1.toDouble()); put("ta2", tA2.toDouble()); put("tang", tAngle.toDouble()); put("tpat", tPat); put("ttile", tTile.toDouble())
             tBmp?.let { put("tbmp", Base64.encodeToString(Png.bytes(it), Base64.NO_WRAP)) }
@@ -210,6 +227,7 @@ class VObj(var kind: Kind = Kind.PATH) {
                 }
             }
             o.fRot = j.optDouble("fr", 0.0).toFloat()
+            o.font = j.optString("fn"); o.tRot = j.optDouble("trot", 0.0).toFloat(); o.gradType = j.optInt("gt"); o.fillMid = if (j.has("fm")) j.getInt("fm") else null
             o.tMode = j.optInt("tm")
             if (o.tMode != 0) {
                 o.tA1 = j.optDouble("ta1", 1.0).toFloat(); o.tA2 = j.optDouble("ta2", 0.0).toFloat(); o.tAngle = j.optDouble("tang", 0.0).toFloat()

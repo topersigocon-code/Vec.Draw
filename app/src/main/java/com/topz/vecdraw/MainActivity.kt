@@ -240,12 +240,14 @@ class MainActivity : AppCompatActivity() {
     private val openMask = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) loadMask(uri) }
     private var maskArgs = floatArrayOf(1f, 0f, 10f)
     private val openSvg = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) loadSvg(uri) }
+    private val openFont = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) loadFont(uri) }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
     private fun write(name: String, mime: String, w: (OutputStream) -> Unit) { pendingWrite = w; createDoc.launch(name to mime) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Fonts.init(filesDir)
         root = FrameLayout(this); cv = VecCanvas(this)
         root.addView(cv, FrameLayout.LayoutParams(-1, -1)); setContentView(root); restoreSettings(); restoreDoc()
         cv.onChange = { refreshers.forEach { it() } }
@@ -305,7 +307,7 @@ class MainActivity : AppCompatActivity() {
             .putInt("palMode", palMode).putString("tool", cv.tool.name)
             .putInt("bg", cv.bgColor).putInt("gridc", cv.gridColor).putInt("gridA", cv.gridAlpha).putInt("guidec", cv.guideColor).putInt("selc", cv.selColor)
             .putFloat("snapR", cv.snapRadius).putBoolean("snapN", cv.snapNodes).putBoolean("snapC", cv.snapCenters).putBoolean("snapE", cv.snapEdges)
-            .putBoolean("rulers", cv.showRulers).putBoolean("tapG", cv.tapGestures).putFloat("hScale", cv.handleScale).putFloat("fhEps", cv.freehandEps).putInt("undoN", cv.undoLimit).putFloat("pAlpha", panelAlpha).putInt("iconDp", iconDp)
+            .putInt("lassoMode", cv.lassoMode).putBoolean("rulers", cv.showRulers).putBoolean("tapG", cv.tapGestures).putFloat("hScale", cv.handleScale).putFloat("fhEps", cv.freehandEps).putInt("undoN", cv.undoLimit).putFloat("pAlpha", panelAlpha).putInt("iconDp", iconDp)
             .putString("st_fill", colStr(st.fill)).putString("st_fill2", colStr(st.fill2)).putString("st_stroke", colStr(st.stroke))
             .putFloat("st_sw", st.strokeW).putInt("st_cap", st.cap).putInt("st_join", st.join).putInt("st_dash", st.dash)
             .putBoolean("st_arrow", st.arrow).putFloat("st_alpha", st.alpha).putBoolean("st_shadow", st.shadow)
@@ -331,7 +333,7 @@ class MainActivity : AppCompatActivity() {
         cv.guideColor = sp.getInt("guidec", cv.guideColor); cv.selColor = sp.getInt("selc", cv.selColor)
         cv.snapRadius = sp.getFloat("snapR", cv.snapRadius).coerceIn(4f, 30f); cv.snapNodes = sp.getBoolean("snapN", true)
         cv.snapCenters = sp.getBoolean("snapC", false); cv.snapEdges = sp.getBoolean("snapE", false)
-        cv.showRulers = sp.getBoolean("rulers", true); cv.tapGestures = sp.getBoolean("tapG", true); cv.handleScale = sp.getFloat("hScale", 1f).coerceIn(0.6f, 2f); cv.freehandEps = sp.getFloat("fhEps", cv.freehandEps).coerceIn(1f, 10f); cv.undoLimit = sp.getInt("undoN", cv.undoLimit).coerceIn(10, 200)
+        cv.lassoMode = sp.getInt("lassoMode", 2).coerceIn(0, 2); cv.showRulers = sp.getBoolean("rulers", true); cv.tapGestures = sp.getBoolean("tapG", true); cv.handleScale = sp.getFloat("hScale", 1f).coerceIn(0.6f, 2f); cv.freehandEps = sp.getFloat("fhEps", cv.freehandEps).coerceIn(1f, 10f); cv.undoLimit = sp.getInt("undoN", cv.undoLimit).coerceIn(10, 200)
         panelAlpha = sp.getFloat("pAlpha", panelAlpha).coerceIn(0.3f, 1f); iconDp = sp.getInt("iconDp", iconDp).coerceIn(24, 44)
         cv.applyTheme()
         st.fill = col("st_fill", st.fill); st.fill2 = col("st_fill2", null); st.stroke = col("st_stroke", st.stroke)
@@ -756,7 +758,7 @@ class MainActivity : AppCompatActivity() {
                 layoutParams = GridLayout.LayoutParams().apply { width = dp(46); height = dp(46); setMargins(dp(2), dp(2), dp(2), dp(2)) }
                 background = GradientDrawable().apply { setColor(0x22FFFFFF); cornerRadius = dp(8).toFloat() }
                 addView(IconView(context, t.icon), FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER))
-                setOnClickListener { cv.tool = t; toast(if (t == Tool.MESH) "Mesh: drag points; select a point, then drag its handles to curve edges; tap a colour to paint" else t.label) }
+                setOnClickListener { cv.tool = t; toast(when (t) { Tool.MESH -> "Mesh: drag points; select a point, then drag its handles to curve edges; tap a colour to paint"; Tool.LASSO -> "Lasso: tap a region to fill it, or drag a loop (long-press the tool for modes)"; else -> t.label }) }
                 setOnLongClickListener { toolOptions(t); true }
             }
             icons[t] = cell; grid.addView(cell)
@@ -785,6 +787,7 @@ class MainActivity : AppCompatActivity() {
             Tool.NODE -> menu("Node operations", listOf(
                 "Add node" to { cv.nodeAdd() }, "Delete node" to { cv.nodeDelete() }, "Break at node" to { cv.nodeBreak() }, "Join / close path" to { cv.nodeJoin() },
                 "Convert to curve" to { cv.nodeToCurve() }, "Convert to line" to { cv.nodeToLine() }, "Make smooth" to { cv.nodeSmooth() }, "Make cusp" to { cv.nodeCusp() }))
+            Tool.LASSO -> menu("Lasso fill", listOf("Anywhere (plain loop)" to { cv.lassoMode = 2 }, "Only inside shapes" to { cv.lassoMode = 0 }, "Only the gaps between shapes" to { cv.lassoMode = 1 }))
             Tool.TRANS -> transMenu()
             Tool.MESH -> menu("Mesh fill", listOf(
                 "Mesh size…" to { numDialog("Mesh vertices", listOf("Rows (2-8)", "Columns (2-8)"), listOf(cv.meshRows.toFloat(), cv.meshCols.toFloat())) { cv.meshRows = it[0].toInt().coerceIn(2, 8); cv.meshCols = it[1].toInt().coerceIn(2, 8); cv.meshApply() } },
@@ -810,6 +813,9 @@ class MainActivity : AppCompatActivity() {
         val ratC = chip("Ratio🔒") { cv.lockRatio = !cv.lockRatio; refreshers.forEach { r -> r() } }
         val gradC = chip("Gradient") {
             menu("Fill", listOf("Uniform fill" to { cv.setFill2(null) }, "Gradient end colour…" to { pickColor(obj().fill2 ?: Color.WHITE) { c -> cv.setFill2(c) } },
+                "Linear ⇄ radial" to { cv.editSel { o -> if (o.fill2 == null) o.fill2 = Color.WHITE; o.gradType = if (o.gradType == 0) 1 else 0 } },
+                "Middle colour…" to { pickColor(obj().fillMid ?: Color.GRAY) { c -> cv.editSel { o -> if (o.fill2 == null) o.fill2 = Color.WHITE; o.fillMid = c } } },
+                "Remove middle colour" to { cv.editSel { it.fillMid = null } },
                 "Gradient angle…" to { numDialog("Angle (deg)", listOf("Angle"), listOf(obj().gradAngle)) { v -> cv.editSel { o -> if (o.fill2 == null) o.fill2 = Color.WHITE; o.gradAngle = v[0] } } }))
         }
         val alpha = SeekBar(this).apply {
@@ -999,7 +1005,9 @@ class MainActivity : AppCompatActivity() {
     })
 
     private fun editMenu() = menu("Edit", listOf(
-        "Undo" to { cv.undo() }, "Redo" to { cv.redo() }, "Copy" to { cv.copySel() }, "Cut" to { cv.cutSel() }, "Paste" to { cv.paste(false) }, "Paste in place" to { cv.paste(true) }, "Styles…" to { stylesMenu() }, "Select all" to { cv.selectAll() }, "Duplicate" to { cv.duplicate() }, "Delete" to { cv.deleteSel() },
+        "Undo" to { cv.undo() }, "Redo" to { cv.redo() }, "Copy" to { cv.copySel() }, "Cut" to { cv.cutSel() }, "Paste" to { cv.paste(false) }, "Paste in place" to { cv.paste(true) }, "Styles…" to { stylesMenu() },
+        "Convert text to curves" to { if (!cv.textToCurves()) toast("Select a text first (text on a path can't be converted)") },
+        "Import font (.ttf / .otf)…" to { openFont.launch(arrayOf("*/*")) }, "Select all" to { cv.selectAll() }, "Duplicate" to { cv.duplicate() }, "Delete" to { cv.deleteSel() },
         "Edit text…" to { cv.sel.firstOrNull { it.kind == Kind.TEXT }?.let { textDialog(it, false) } },
         "Fit text to selected path" to { cv.attachTextToPath() }, "Detach text from path" to { cv.detachText() }))
 
@@ -1040,11 +1048,16 @@ class MainActivity : AppCompatActivity() {
         val bold = CheckBox(this).apply { text = "Bold"; isChecked = o.bold }; val ital = CheckBox(this).apply { text = "Italic"; isChecked = o.italic }
         col.addView(bold); col.addView(ital)
         val al = Spinner(this).apply { adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, listOf("Align left", "Align centre", "Align right")); setSelection(o.align) }; col.addView(al)
+        val fontNames = Fonts.all()
+        val fontSp = Spinner(this).apply { adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, fontNames); setSelection(max(0, fontNames.indexOf(o.font.ifEmpty { "sans" }))) }
+        col.addView(label("Font")); col.addView(fontSp)
+        val rotF = field(200).also { it.setText(fmt(o.tRot)); col.addView(label("Rotation (°)")); col.addView(it) }
         AlertDialog.Builder(this).setTitle(if (isNew) "New text" else "Edit text").setView(ScrollView(this).apply { addView(col) })
             .setPositiveButton("OK") { _, _ ->
                 if (!isNew) cv.checkpoint()
                 o.text = et.text.toString(); o.size = f(sz.text, 12f).coerceAtLeast(1f) * 25.4f / 72f; o.spacing = f(kern.text, 0f); o.leading = f(lead.text, 1.2f)
                 o.bold = bold.isChecked; o.italic = ital.isChecked; o.align = al.selectedItemPosition
+                o.font = fontNames[fontSp.selectedItemPosition.coerceIn(0, fontNames.lastIndex)]; o.tRot = f(rotF.text, 0f)
                 cv.commitText(o, isNew)
             }.setNegativeButton("Cancel", null).show()
     }
@@ -1158,6 +1171,13 @@ class MainActivity : AppCompatActivity() {
         if (list.isEmpty()) toast("No importable shapes (text, images, clips and <use> are skipped)")
         else { cv.importObjects(list); toast("Imported ${list.size} shapes") }
     } catch (e: Exception) { toast("Could not import SVG: ${e.message}") }
+
+    private fun loadFont(uri: Uri) {
+        var name: String? = null
+        try { contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) name = c.getString(0) } } catch (e: Exception) { }
+        val n = Fonts.import(contentResolver, uri, name)
+        toast(if (n != null) "Font added: $n (choose it when editing text)" else "Could not load that font file")
+    }
 
     // ---------- Storage (SAF) ----------
     private fun loadProject(uri: Uri) = try {
