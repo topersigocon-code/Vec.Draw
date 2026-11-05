@@ -42,7 +42,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     companion object {
         const val M_NONE = 0; const val M_PAN = 1; const val M_MOVE = 2; const val M_SCALE = 3; const val M_ROT = 4
         const val M_MARQ = 5; const val M_NODE = 6; const val M_HIN = 7; const val M_HOUT = 8; const val M_SHAPE = 9
-        const val M_SHAPE3 = 10; const val M_PEN = 11; const val M_FH = 12; const val M_ENV = 13; const val M_MESHV = 14; const val M_MESHH = 15
+        const val M_SHAPE3 = 10; const val M_PEN = 11; const val M_FH = 12; const val M_ENV = 13; const val M_MESHV = 14; const val M_MESHH = 15; const val M_GUIDE = 16
         var clip: List<VObj> = emptyList(); var pasteCount = 0
     }
 
@@ -61,6 +61,10 @@ class VecCanvas(ctx: Context) : View(ctx) {
     var snapRadius = 10f; var snapNodes = true; var snapCenters = false; var snapEdges = false
     var freehandEps = 2f; var undoLimit = 60
     var handleScale = 1f   // size of touch handles / hit areas
+    var showRulers = true; var tapGestures = true
+    private var guideAxis = 0; private var guideIdx = -1; private var guideVal = 0f      // axis 0 = vertical guide (x), 1 = horizontal (y)
+    private var maxPtr = 0; private var tapT = 0L; private var tapX = 0f; private var tapY = 0f; private var tapMoved = false; private var gestureScaled = false
+    private val rulerPx: Float get() = if (showRulers) 22f * resources.displayMetrics.density else 0f
     var meshRows = 3; var meshCols = 3; private var meshV = -1
     private var meshHdir = -1
     var polySides = 6; var starPts = 5; var basicIdx = 0
@@ -105,8 +109,23 @@ class VecCanvas(ctx: Context) : View(ctx) {
 
     fun fit() {
         if (width == 0) return
-        scale = min(width / doc.w, height / doc.h) * 0.88f
-        panX = (width - doc.w * scale) / 2; panY = (height - doc.h * scale) / 2; invalidate(); status()
+        val rh = rulerPx
+        scale = min((width - rh) / doc.w, (height - rh) / doc.h) * 0.88f
+        panX = rh + ((width - rh) - doc.w * scale) / 2; panY = rh + ((height - rh) - doc.h * scale) / 2; invalidate(); status()
+    }
+
+    private fun zoomRect(r: RectF) {
+        if (width == 0) return
+        val rh = rulerPx; val w = max(r.width(), 1f); val h = max(r.height(), 1f)
+        scale = min((width - rh) / w, (height - rh) / h).coerceIn(0.3f, 400f)
+        panX = rh + ((width - rh) - r.width() * scale) / 2 - r.left * scale; panY = rh + ((height - rh) - r.height() * scale) / 2 - r.top * scale
+        invalidate(); status()
+    }
+    fun zoomPage() = fit()
+    fun zoomSel() { val b = selBounds() ?: return; val m = max(b.width(), b.height()) * 0.12f; zoomRect(RectF(b.left - m, b.top - m, b.right + m, b.bottom + m)) }
+    fun zoom100() {
+        val cxd = docX(width / 2f); val cyd = docY(height / 2f); scale = 3.7795f
+        panX = width / 2f - cxd * scale; panY = height / 2f - cyd * scale; invalidate(); status()
     }
 
     fun status(extra: String = "") {
@@ -202,7 +221,54 @@ class VecCanvas(ctx: Context) : View(ctx) {
         preview()?.let { c.drawPath(it, pv) }
         c.restore()
         overlays(c)
+        drawRulers(c)
     }
+
+    private val rulerBg = Paint().apply { color = 0xF2262A30.toInt() }
+    private val rulerCorner = Paint().apply { color = 0xFF1A1D21.toInt() }
+    private val rulerInk = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFB8C0CC.toInt(); strokeWidth = 1f; textSize = 9f * resources.displayMetrics.density }
+    private val guidePrev = Paint().apply { color = 0xFFFFC107.toInt(); strokeWidth = 2f }
+
+    private fun niceStep(minUnits: Float): Float {
+        var s = 0.001f
+        while (s < 1e8f) { for (f in floatArrayOf(1f, 2f, 5f)) if (s * f >= minUnits) return s * f; s *= 10f }
+        return s
+    }
+
+    private fun drawRulers(c: Canvas) {
+        if (mode == M_GUIDE) {
+            if (guideAxis == 1) { val sy = scrY(guideVal); c.drawLine(0f, sy, width.toFloat(), sy, guidePrev) }
+            else { val sx = scrX(guideVal); c.drawLine(sx, 0f, sx, height.toFloat(), guidePrev) }
+        }
+        val rh = rulerPx; if (rh <= 0f) return
+        val uMm = doc.uf(); val ppu = scale * uMm; val step = niceStep(70f / ppu); val minor = step / 5f
+        val inc = if (minor * ppu >= 6f) minor else step
+        val dec = if (step >= 1f) 0 else ceil(-log10(step.toDouble())).toInt().coerceIn(0, 3)
+        val fmt = "%.${dec}f"
+        c.drawRect(0f, 0f, width.toFloat(), rh, rulerBg); c.drawRect(0f, 0f, rh, height.toFloat(), rulerBg)
+        var v = floor(docX(rh) / uMm / inc) * inc; var n = 0
+        while (n < 4000) {
+            val sx = scrX(v * uMm); if (sx > width) break
+            if (sx >= rh) {
+                val major = abs(v / step - Math.round(v / step)) < 0.01f
+                c.drawLine(sx, if (major) rh * 0.4f else rh * 0.75f, sx, rh, rulerInk)
+                if (major) c.drawText(String.format(java.util.Locale.US, fmt, v), sx + 3f, rh * 0.62f, rulerInk)
+            }
+            v += inc; n++
+        }
+        v = floor(docY(rh) / uMm / inc) * inc; n = 0
+        while (n < 4000) {
+            val sy = scrY(v * uMm); if (sy > height) break
+            if (sy >= rh) {
+                val major = abs(v / step - Math.round(v / step)) < 0.01f
+                c.drawLine(if (major) rh * 0.4f else rh * 0.75f, sy, rh, sy, rulerInk)
+                if (major) { c.save(); c.translate(rh * 0.62f, sy - 3f); c.rotate(-90f); c.drawText(String.format(java.util.Locale.US, fmt, v), 0f, 0f, rulerInk); c.restore() }
+            }
+            v += inc; n++
+        }
+        c.drawRect(0f, 0f, rh, rh, rulerCorner)
+    }
+
 
     private fun preview(): Path? = when {
         p3 == 1 -> build3(cx, cy)?.path()
@@ -269,9 +335,10 @@ class VecCanvas(ctx: Context) : View(ctx) {
 
     // ---------- touch ----------
     private val sd = ScaleGestureDetector(ctx, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-        private var lfx = 0f; private var lfy = 0f
-        override fun onScaleBegin(d: ScaleGestureDetector): Boolean { lfx = d.focusX; lfy = d.focusY; return true }
+        private var lfx = 0f; private var lfy = 0f; private var sfx = 0f; private var sfy = 0f
+        override fun onScaleBegin(d: ScaleGestureDetector): Boolean { lfx = d.focusX; lfy = d.focusY; sfx = d.focusX; sfy = d.focusY; return true }
         override fun onScale(d: ScaleGestureDetector): Boolean {
+            if (abs(d.scaleFactor - 1f) > 0.02f || hypot(d.focusX - sfx, d.focusY - sfy) > 30f) gestureScaled = true
             val ns = (scale * d.scaleFactor).coerceIn(0.3f, 400f); val k = ns / scale
             panX = d.focusX - (lfx - panX) * k; panY = d.focusY - (lfy - panY) * k
             scale = ns; lfx = d.focusX; lfy = d.focusY; invalidate(); status(); return true
@@ -287,6 +354,12 @@ class VecCanvas(ctx: Context) : View(ctx) {
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         sd.onTouchEvent(e); gd.onTouchEvent(e)
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> { maxPtr = 1; tapT = e.eventTime; tapX = e.x; tapY = e.y; tapMoved = false; gestureScaled = false }
+            MotionEvent.ACTION_POINTER_DOWN -> maxPtr = max(maxPtr, e.pointerCount)
+            MotionEvent.ACTION_MOVE -> if (hypot(e.x - tapX, e.y - tapY) > 28f) tapMoved = true
+            MotionEvent.ACTION_UP -> if (tapGestures && maxPtr >= 2 && !tapMoved && !gestureScaled && e.eventTime - tapT < 300) { if (maxPtr == 2) undo() else redo() }
+        }
         if (e.pointerCount > 1 || sd.isInProgress) { if (!multi) cancelGesture(); multi = true; return true }
         if (multi) { if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) multi = false; return true }
         when (e.actionMasked) {
@@ -308,6 +381,11 @@ class VecCanvas(ctx: Context) : View(ctx) {
         ox0 = docX(x); oy0 = docY(y); pdx = ox0; pdy = oy0
         val p = snapPt(ox0, oy0); sx0 = p.x; sy0 = p.y; cx = p.x; cy = p.y
         mode = M_NONE
+        val rh = rulerPx
+        if (rh > 0f && (y < rh || x < rh)) {
+            if (y < rh && x < rh) return                   // corner square
+            guideAxis = if (y < rh) 1 else 0; guideIdx = -1; guideVal = if (guideAxis == 1) oy0 else ox0; mode = M_GUIDE; invalidate(); return
+        }
         when (tool) {
             Tool.PAN -> mode = M_PAN
             Tool.PICK -> pickDown(x, y)
@@ -350,6 +428,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
             M_ENV -> if (moved) { ensureCk(); envDrag(p) }
             M_MESHV -> if (moved) { ensureCk(); meshDrag(rx, ry) }
             M_MESHH -> if (moved) { ensureCk(); meshHandleDrag(rx, ry) }
+            M_GUIDE -> guideVal = if (guideAxis == 1) ry else rx
             M_FH -> fh.add(PointF(rx, ry))
         }
         pdx = rx; pdy = ry; cx = p.x; cy = p.y; lx = x; ly = y
@@ -359,6 +438,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     private fun up(x: Float, y: Float) {
         val rx = docX(x); val ry = docY(y); val p = snapPt(rx, ry); cx = p.x; cy = p.y; pdx = rx; pdy = ry
         when (mode) {
+            M_GUIDE -> finishGuide(x, y)
             M_MARQ -> {
                 val r = RectF(min(ox0, rx), min(oy0, ry), max(ox0, rx), max(oy0, ry))
                 sel.clear(); doc.objs.filter { pickable(it) && r.contains(it.bounds()) }.let { sel.addAll(it) }; addGroupMates()
@@ -394,8 +474,29 @@ class VecCanvas(ctx: Context) : View(ctx) {
         }
         val o = topHit(ox0, oy0)
         if (o != null) { if (o !in sel) { sel.clear(); sel.add(o); addGroupMates() }; mode = M_MOVE; sb = selBounds()!!; rawDx = 0f; rawDy = 0f }
-        else { sel.clear(); mode = M_MARQ }
+        else {
+            val gi = guideAt(x, y)
+            if (gi != null) { guideAxis = gi.first; guideIdx = gi.second; guideVal = if (gi.first == 1) doc.hg[gi.second] else doc.vg[gi.second]; mode = M_GUIDE }
+            else { sel.clear(); mode = M_MARQ }
+        }
         selNode = -1; onChange()
+    }
+
+    private fun guideAt(x: Float, y: Float): Pair<Int, Int>? {
+        val tol = 14f
+        doc.vg.forEachIndexed { i, g -> if (abs(scrX(g) - x) < tol) return 0 to i }
+        doc.hg.forEachIndexed { i, g -> if (abs(scrY(g) - y) < tol) return 1 to i }
+        return null
+    }
+
+    /** Drop a guide: a new one is added, an existing one moves; releasing it back on its ruler removes it. */
+    private fun finishGuide(x: Float, y: Float) {
+        val rh = rulerPx; val v = Math.round(guideVal * 10f) / 10f
+        val onRuler = if (guideAxis == 1) y < rh else x < rh
+        val list = if (guideAxis == 1) doc.hg else doc.vg
+        if (guideIdx in list.indices) { if (onRuler) list.removeAt(guideIdx) else list[guideIdx] = v }
+        else if (!onRuler) list.add(v)
+        guideIdx = -1; changed()
     }
 
     private fun transformSel(m: Matrix) { sel.forEach { it.transform(m) } }
@@ -656,6 +757,40 @@ class VecCanvas(ctx: Context) : View(ctx) {
         val c = doc.objs.filter { it in sel }.map { o -> o.copy().also { d -> d.transform(Matrix().apply { setTranslate(5f, 5f) }); if (d.group != 0) d.group = gmap.getOrPut(d.group) { next++ } } }
         doc.objs.addAll(c); sel.clear(); sel.addAll(c); changed()
     }
+    /** A temporary document that contains just the selection (page = its bounds + 1 mm), used by "Export selection". */
+    fun docOfSelection(): Doc? {
+        val items = doc.objs.filter { it in sel }; if (items.isEmpty()) return null
+        val b = RectF(items[0].bounds()); items.forEach { b.union(it.bounds()) }
+        if (b.width() < 0.1f || b.height() < 0.1f) return null
+        b.inset(-1f, -1f)
+        val d = Doc(); d.w = b.width(); d.h = b.height(); d.unit = doc.unit; d.grid = doc.grid
+        d.layers.clear(); doc.layers.forEach { d.layers.add(Layer(it.name, it.visible, false, it.opacity)) }
+        val m = Matrix().apply { setTranslate(-b.left, -b.top) }
+        items.forEach { o -> val c = o.copy(); c.transform(m); d.objs.add(c) }
+        return d
+    }
+
+    /** Make [count] copies; copy k is offset by k*(dx,dy), turned by k*rot about the selection centre and scaled by sizeK^k. */
+    fun stepRepeat(count: Int, dx: Float, dy: Float, rot: Float, sizeK: Float) {
+        val items = doc.objs.filter { it in sel }; val b = selBounds() ?: return
+        if (items.isEmpty() || sizeK <= 0f) return
+        checkpoint()
+        val cx0 = b.centerX(); val cy0 = b.centerY(); val made = ArrayList<VObj>(); var next = (doc.objs.maxOfOrNull { it.group } ?: 0) + 1
+        for (k in 1..count) {
+            val s = Math.pow(sizeK.toDouble(), k.toDouble()).toFloat()
+            val m = Matrix(); m.setScale(s, s, cx0, cy0); m.postRotate(rot * k, cx0, cy0); m.postTranslate(dx * k, dy * k)
+            val gmap = HashMap<Int, Int>()
+            for (o in items) { val c = o.copy(); c.transform(m); if (c.group != 0) c.group = gmap.getOrPut(c.group) { next++ }; made.add(c) }
+        }
+        doc.objs.addAll(made); sel.clear(); sel.addAll(made); selNode = -1; changed()
+    }
+
+    /** Apply a saved style to the selection (toSel) and make it the default for new shapes. */
+    fun applyStyle(src: VObj, toSel: Boolean) {
+        if (toSel && sel.isNotEmpty()) { checkpoint(); sel.forEach { copyStyle(src, it) } }
+        copyStyle(src, style); changed()
+    }
+
     // ---------- groups ----------
     private fun addGroupMates() {
         val ids = sel.filter { it.group != 0 }.map { it.group }.toSet(); if (ids.isEmpty()) return

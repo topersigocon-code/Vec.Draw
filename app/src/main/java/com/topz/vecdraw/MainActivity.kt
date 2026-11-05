@@ -24,6 +24,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.graphics.PathParser
 import androidx.core.view.doOnLayout
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.OutputStream
 import kotlin.math.abs
@@ -304,7 +305,7 @@ class MainActivity : AppCompatActivity() {
             .putInt("palMode", palMode).putString("tool", cv.tool.name)
             .putInt("bg", cv.bgColor).putInt("gridc", cv.gridColor).putInt("gridA", cv.gridAlpha).putInt("guidec", cv.guideColor).putInt("selc", cv.selColor)
             .putFloat("snapR", cv.snapRadius).putBoolean("snapN", cv.snapNodes).putBoolean("snapC", cv.snapCenters).putBoolean("snapE", cv.snapEdges)
-            .putFloat("hScale", cv.handleScale).putFloat("fhEps", cv.freehandEps).putInt("undoN", cv.undoLimit).putFloat("pAlpha", panelAlpha).putInt("iconDp", iconDp)
+            .putBoolean("rulers", cv.showRulers).putBoolean("tapG", cv.tapGestures).putFloat("hScale", cv.handleScale).putFloat("fhEps", cv.freehandEps).putInt("undoN", cv.undoLimit).putFloat("pAlpha", panelAlpha).putInt("iconDp", iconDp)
             .putString("st_fill", colStr(st.fill)).putString("st_fill2", colStr(st.fill2)).putString("st_stroke", colStr(st.stroke))
             .putFloat("st_sw", st.strokeW).putInt("st_cap", st.cap).putInt("st_join", st.join).putInt("st_dash", st.dash)
             .putBoolean("st_arrow", st.arrow).putFloat("st_alpha", st.alpha).putBoolean("st_shadow", st.shadow)
@@ -330,7 +331,7 @@ class MainActivity : AppCompatActivity() {
         cv.guideColor = sp.getInt("guidec", cv.guideColor); cv.selColor = sp.getInt("selc", cv.selColor)
         cv.snapRadius = sp.getFloat("snapR", cv.snapRadius).coerceIn(4f, 30f); cv.snapNodes = sp.getBoolean("snapN", true)
         cv.snapCenters = sp.getBoolean("snapC", false); cv.snapEdges = sp.getBoolean("snapE", false)
-        cv.handleScale = sp.getFloat("hScale", 1f).coerceIn(0.6f, 2f); cv.freehandEps = sp.getFloat("fhEps", cv.freehandEps).coerceIn(1f, 10f); cv.undoLimit = sp.getInt("undoN", cv.undoLimit).coerceIn(10, 200)
+        cv.showRulers = sp.getBoolean("rulers", true); cv.tapGestures = sp.getBoolean("tapG", true); cv.handleScale = sp.getFloat("hScale", 1f).coerceIn(0.6f, 2f); cv.freehandEps = sp.getFloat("fhEps", cv.freehandEps).coerceIn(1f, 10f); cv.undoLimit = sp.getInt("undoN", cv.undoLimit).coerceIn(10, 200)
         panelAlpha = sp.getFloat("pAlpha", panelAlpha).coerceIn(0.3f, 1f); iconDp = sp.getInt("iconDp", iconDp).coerceIn(24, 44)
         cv.applyTheme()
         st.fill = col("st_fill", st.fill); st.fill2 = col("st_fill2", null); st.stroke = col("st_stroke", st.stroke)
@@ -655,7 +656,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun resetSettings() {
         cv.bgColor = 0xFF1B1D21.toInt(); cv.gridColor = Color.BLACK; cv.gridAlpha = 15; cv.guideColor = 0xFF00BCD4.toInt(); cv.selColor = GOLD
-        cv.snapRadius = 10f; cv.snapNodes = true; cv.snapCenters = false; cv.snapEdges = false; cv.freehandEps = 2f; cv.undoLimit = 60; cv.handleScale = 1f
+        cv.snapRadius = 10f; cv.snapNodes = true; cv.snapCenters = false; cv.snapEdges = false; cv.freehandEps = 2f; cv.undoLimit = 60; cv.handleScale = 1f; cv.showRulers = true; cv.tapGestures = true
         panelAlpha = 0.93f; iconDp = 30; applySettings()
     }
 
@@ -699,6 +700,9 @@ class MainActivity : AppCompatActivity() {
         check("To object centres", { cv.snapCenters }, { cv.snapCenters = it })
         check("To object edges & corners", { cv.snapEdges }, { cv.snapEdges = it })
         col.addView(TextView(this).apply { text = "Object snapping is switched on with “Objects” in the status bar."; textSize = 11f })
+        head("View & gestures")
+        check("Show rulers (drag from a ruler to make a guide)", { cv.showRulers }, { cv.showRulers = it })
+        check("Two-finger tap = undo, three-finger tap = redo", { cv.tapGestures }, { cv.tapGestures = it })
         head("Drawing")
         slider("Freehand smoothing", 1, 10, { cv.freehandEps.toInt() }, { cv.freehandEps = it.toFloat() }, " px")
         slider("Undo steps", 10, 200, { cv.undoLimit }, { cv.undoLimit = it }, "")
@@ -946,7 +950,7 @@ class MainActivity : AppCompatActivity() {
         }
         row.addView(statusTv)
         toggle("Grid⌗", { cv.showGrid }, { cv.showGrid = it }); toggle("⊞Snap", { cv.snapGrid }, { cv.snapGrid = it })
-        toggle("Guides", { cv.snapGuides }, { cv.snapGuides = it }); toggle("Objects", { cv.snapObjs }, { cv.snapObjs = it })
+        toggle("Guides", { cv.snapGuides }, { cv.snapGuides = it }); toggle("Objects", { cv.snapObjs }, { cv.snapObjs = it }); toggle("Rulers", { cv.showRulers }, { cv.showRulers = it; cv.fit() })
         return hscroll(row)
     }
 
@@ -972,7 +976,7 @@ class MainActivity : AppCompatActivity() {
     // ---------- Menus ----------
     private fun mainMenu() = menu("VecDraw by Topz", listOf(
         "File" to { fileMenu() }, "Edit" to { editMenu() }, "Arrange / Transform" to { arrangeMenu() },
-        "Effects" to { effectsMenu() }, "Page & Grid" to { pageMenu() }, "Panels" to { panelMenu() }, "Settings…" to { settingsDialog() }, "Reset panel layout" to { layoutPanels(true) }))
+        "Effects" to { effectsMenu() }, "View" to { viewMenu() }, "Page & Grid" to { pageMenu() }, "Panels" to { panelMenu() }, "Settings…" to { settingsDialog() }, "Reset panel layout" to { layoutPanels(true) }))
 
     private fun fileMenu() = menu("File", listOf(
         "New" to { newDrawing() },
@@ -982,24 +986,25 @@ class MainActivity : AppCompatActivity() {
         "Export PDF (vector)…" to { write("drawing.pdf", "application/pdf") { Export.pdf(cv.doc, it) } },
         "Export PNG…" to { dpiMenu(false) }, "Export JPEG…" to { dpiMenu(true) },
         "Import image (reference trace)…" to { openImage.launch(arrayOf("image/*")) },
-        "Import SVG…" to { openSvg.launch(arrayOf("*/*")) }))
+        "Import SVG…" to { openSvg.launch(arrayOf("*/*")) },
+        "Export selection…" to { exportSelectionMenu() }))
 
-    private fun dpiMenu(jpeg: Boolean) = menu("Resolution", listOf(72, 150, 300, 600).map { dpi ->
+    private fun dpiMenu(jpeg: Boolean, target: Doc? = null) = menu("Resolution", listOf(72, 150, 300, 600).map { dpi ->
         "$dpi DPI" to {
-            val eff = Export.safeDpi(cv.doc, dpi); if (eff < dpi - 0.5f) toast("Reduced to ${eff.roundToInt()} DPI (memory limit)")
+            val eff = Export.safeDpi(target ?: cv.doc, dpi); if (eff < dpi - 0.5f) toast("Reduced to ${eff.roundToInt()} DPI (memory limit)")
             write(if (jpeg) "drawing.jpg" else "drawing.png", if (jpeg) "image/jpeg" else "image/png") { os ->
-                val b = Export.bitmap(cv.doc, eff, jpeg); b.compress(if (jpeg) Bitmap.CompressFormat.JPEG else Bitmap.CompressFormat.PNG, 95, os); b.recycle()
+                val b = Export.bitmap(target ?: cv.doc, eff, jpeg); b.compress(if (jpeg) Bitmap.CompressFormat.JPEG else Bitmap.CompressFormat.PNG, 95, os); b.recycle()
             }
         }
     })
 
     private fun editMenu() = menu("Edit", listOf(
-        "Undo" to { cv.undo() }, "Redo" to { cv.redo() }, "Copy" to { cv.copySel() }, "Cut" to { cv.cutSel() }, "Paste" to { cv.paste(false) }, "Paste in place" to { cv.paste(true) }, "Select all" to { cv.selectAll() }, "Duplicate" to { cv.duplicate() }, "Delete" to { cv.deleteSel() },
+        "Undo" to { cv.undo() }, "Redo" to { cv.redo() }, "Copy" to { cv.copySel() }, "Cut" to { cv.cutSel() }, "Paste" to { cv.paste(false) }, "Paste in place" to { cv.paste(true) }, "Styles…" to { stylesMenu() }, "Select all" to { cv.selectAll() }, "Duplicate" to { cv.duplicate() }, "Delete" to { cv.deleteSel() },
         "Edit text…" to { cv.sel.firstOrNull { it.kind == Kind.TEXT }?.let { textDialog(it, false) } },
         "Fit text to selected path" to { cv.attachTextToPath() }, "Detach text from path" to { cv.detachText() }))
 
     private fun arrangeMenu() = menu("Arrange / Transform", listOf(
-        "Group" to { cv.group() }, "Ungroup" to { cv.ungroup() }, "Combine (makes holes)" to { cv.combine() }, "Break apart" to { cv.breakApart() },
+        "Step and repeat…" to { stepRepeatDialog() }, "Group" to { cv.group() }, "Ungroup" to { cv.ungroup() }, "Combine (makes holes)" to { cv.combine() }, "Break apart" to { cv.breakApart() },
         "Shape operations…" to { shapeOpsMenu() }, "Align…" to { alignMenu() }, "Distribute…" to { distributeMenu() },
         "Bring to front" to { cv.order(true, false) }, "Send to back" to { cv.order(false, false) },
         "Flip horizontal" to { cv.flipH() }, "Flip vertical" to { cv.flipV() }, "Rotate 90°" to { cv.rotate(90f) },
@@ -1042,6 +1047,67 @@ class MainActivity : AppCompatActivity() {
                 o.bold = bold.isChecked; o.italic = ital.isChecked; o.align = al.selectedItemPosition
                 cv.commitText(o, isNew)
             }.setNegativeButton("Cancel", null).show()
+    }
+
+    // ---------- view / export selection / step & repeat / saved styles ----------
+    private fun viewMenu() {
+        menu("View", listOf("Zoom to page" to { cv.zoomPage() }, "Zoom to selection" to { cv.zoomSel() }, "Zoom 100%" to { cv.zoom100() },
+            (if (cv.showRulers) "Hide rulers" else "Show rulers") to { cv.showRulers = !cv.showRulers; cv.fit() },
+            "Clear guides" to { cv.doc.vg.clear(); cv.doc.hg.clear(); cv.invalidate() }))
+    }
+
+    private fun exportSelectionMenu() {
+        val d = cv.docOfSelection() ?: run { toast("Select something first"); return }
+        menu("Export selection", listOf(
+            "SVG (vector)…" to { write("selection.svg", "image/svg+xml") { it.write(Export.svg(d).toByteArray()) } },
+            "PDF (vector)…" to { write("selection.pdf", "application/pdf") { Export.pdf(d, it) } },
+            "PNG…" to { dpiMenu(false, d) }, "JPEG…" to { dpiMenu(true, d) }))
+    }
+
+    private fun stepRepeatDialog() {
+        val u = uf(); val unit = cv.doc.unit
+        numDialog("Step and repeat", listOf("Copies (1-200)", "Offset X ($unit)", "Offset Y ($unit)", "Rotation per copy (°)", "Size per copy (%)"), listOf(5f, 20f / u, 0f, 0f, 100f)) {
+            cv.stepRepeat(it[0].toInt().coerceIn(1, 200), it[1] * u, it[2] * u, it[3], it[4] / 100f)
+        }
+    }
+
+    private fun styleList(): MutableList<JSONObject> {
+        val raw = getSharedPreferences("vd", MODE_PRIVATE).getString("styles", "[]") ?: "[]"
+        val arr = try { JSONArray(raw) } catch (e: Exception) { JSONArray() }
+        return MutableList(arr.length()) { arr.getJSONObject(it) }
+    }
+    private fun saveStyleList(l: List<JSONObject>) { getSharedPreferences("vd", MODE_PRIVATE).edit().putString("styles", JSONArray(l).toString()).apply() }
+
+    private fun styleToJson(o: VObj, name: String) = JSONObject().put("n", name).put("f", colStr(o.fill)).put("f2", colStr(o.fill2)).put("ga", o.gradAngle.toDouble())
+        .put("s", colStr(o.stroke)).put("sw", o.strokeW.toDouble()).put("cap", o.cap).put("jn", o.join).put("ds", o.dash).put("ar", o.arrow)
+        .put("a", o.alpha.toDouble()).put("sh", o.shadow)
+
+    private fun jsonToStyle(j: JSONObject) = VObj().also {
+        it.fill = j.optString("f", "none").toIntOrNull(); it.fill2 = j.optString("f2", "none").toIntOrNull(); it.gradAngle = j.optDouble("ga", 0.0).toFloat()
+        it.stroke = j.optString("s", "none").toIntOrNull(); it.strokeW = j.optDouble("sw", 0.3).toFloat(); it.cap = j.optInt("cap"); it.join = j.optInt("jn")
+        it.dash = j.optInt("ds"); it.arrow = j.optBoolean("ar"); it.alpha = j.optDouble("a", 1.0).toFloat(); it.shadow = j.optBoolean("sh")
+    }
+
+    private fun stylesMenu() {
+        val items = mutableListOf<Pair<String, () -> Unit>>("＋ Save current style…" to { saveStyleDialog() })
+        for ((i, j) in styleList().withIndex()) items.add("▸ ${j.optString("n")}" to { styleActions(i) })
+        menu("Styles", items)
+    }
+
+    private fun saveStyleDialog() {
+        val et = EditText(this).apply { hint = "Style name"; setSingleLine() }
+        AlertDialog.Builder(this).setTitle("Save style (from the selection, or the current default)")
+            .setView(FrameLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(et) })
+            .setPositiveButton("Save") { _, _ -> val l = styleList(); l.add(styleToJson(obj(), et.text.toString().trim().ifEmpty { "Style" })); saveStyleList(l) }
+            .setNegativeButton("Cancel", null).show()
+    }
+
+    private fun styleActions(i: Int) {
+        val l = styleList(); if (i !in l.indices) return; val j = l[i]
+        menu(j.optString("n"), listOf(
+            "Apply to selection" to { cv.applyStyle(jsonToStyle(j), true) },
+            "Use for new shapes" to { cv.applyStyle(jsonToStyle(j), false) },
+            "Delete" to { l.removeAt(i); saveStyleList(l) }))
     }
 
     // ---------- align / distribute / shape operations ----------

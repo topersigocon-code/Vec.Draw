@@ -16,3 +16,4 @@ Settings (☰ → Settings…): canvas/grid/guide/selection colours, grid opacit
 Toolbox is a single column; ▾ on any panel opens a flyout with everything in it. Hiding a panel collapses it to its title bar (tap the title to bring it back).
 Settings now include Touch handle size. Properties controls are grouped (Colour / Outline / Effects / Size & position) and wrap in the vertical / flyout layout. Panels → Tidy titles lines up collapsed title bars.
 Group / Ungroup, Copy / Cut / Paste (+ in place), Align and Distribute (groups move as one), Combine / Break apart with real holes (even-odd), Weld / Intersect / Exclude / Trim / Subtract. Results of shape operations are fine polylines. Holes of compound shapes are not node-editable.
+Rulers with drag-out guides (drag a guide back onto its ruler to delete it), View menu (zoom to page / selection / 100%), Export selection, Step and repeat, saved Styles, two-finger tap = undo / three-finger tap = redo.
