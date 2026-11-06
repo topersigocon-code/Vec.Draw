@@ -307,7 +307,7 @@ class MainActivity : AppCompatActivity() {
             .putInt("palMode", palMode).putString("tool", cv.tool.name)
             .putInt("bg", cv.bgColor).putInt("gridc", cv.gridColor).putInt("gridA", cv.gridAlpha).putInt("guidec", cv.guideColor).putInt("selc", cv.selColor)
             .putFloat("snapR", cv.snapRadius).putBoolean("snapN", cv.snapNodes).putBoolean("snapC", cv.snapCenters).putBoolean("snapE", cv.snapEdges)
-            .putInt("lassoMode", cv.lassoMode).putBoolean("rulers", cv.showRulers).putBoolean("tapG", cv.tapGestures).putFloat("hScale", cv.handleScale).putFloat("fhEps", cv.freehandEps).putInt("undoN", cv.undoLimit).putFloat("pAlpha", panelAlpha).putInt("iconDp", iconDp)
+            .putBoolean("pressure", cv.pressureStroke).putInt("lassoMode", cv.lassoMode).putBoolean("rulers", cv.showRulers).putBoolean("tapG", cv.tapGestures).putFloat("hScale", cv.handleScale).putFloat("fhEps", cv.freehandEps).putInt("undoN", cv.undoLimit).putFloat("pAlpha", panelAlpha).putInt("iconDp", iconDp)
             .putString("st_fill", colStr(st.fill)).putString("st_fill2", colStr(st.fill2)).putString("st_stroke", colStr(st.stroke))
             .putFloat("st_sw", st.strokeW).putInt("st_cap", st.cap).putInt("st_join", st.join).putInt("st_dash", st.dash)
             .putBoolean("st_arrow", st.arrow).putFloat("st_alpha", st.alpha).putBoolean("st_shadow", st.shadow)
@@ -333,7 +333,7 @@ class MainActivity : AppCompatActivity() {
         cv.guideColor = sp.getInt("guidec", cv.guideColor); cv.selColor = sp.getInt("selc", cv.selColor)
         cv.snapRadius = sp.getFloat("snapR", cv.snapRadius).coerceIn(4f, 30f); cv.snapNodes = sp.getBoolean("snapN", true)
         cv.snapCenters = sp.getBoolean("snapC", false); cv.snapEdges = sp.getBoolean("snapE", false)
-        cv.lassoMode = sp.getInt("lassoMode", 2).coerceIn(0, 2); cv.showRulers = sp.getBoolean("rulers", true); cv.tapGestures = sp.getBoolean("tapG", true); cv.handleScale = sp.getFloat("hScale", 1f).coerceIn(0.6f, 2f); cv.freehandEps = sp.getFloat("fhEps", cv.freehandEps).coerceIn(1f, 10f); cv.undoLimit = sp.getInt("undoN", cv.undoLimit).coerceIn(10, 200)
+        cv.pressureStroke = sp.getBoolean("pressure", true); cv.lassoMode = sp.getInt("lassoMode", 2).coerceIn(0, 2); cv.showRulers = sp.getBoolean("rulers", true); cv.tapGestures = sp.getBoolean("tapG", true); cv.handleScale = sp.getFloat("hScale", 1f).coerceIn(0.6f, 2f); cv.freehandEps = sp.getFloat("fhEps", cv.freehandEps).coerceIn(1f, 10f); cv.undoLimit = sp.getInt("undoN", cv.undoLimit).coerceIn(10, 200)
         panelAlpha = sp.getFloat("pAlpha", panelAlpha).coerceIn(0.3f, 1f); iconDp = sp.getInt("iconDp", iconDp).coerceIn(24, 44)
         cv.applyTheme()
         st.fill = col("st_fill", st.fill); st.fill2 = col("st_fill2", null); st.stroke = col("st_stroke", st.stroke)
@@ -658,7 +658,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun resetSettings() {
         cv.bgColor = 0xFF1B1D21.toInt(); cv.gridColor = Color.BLACK; cv.gridAlpha = 15; cv.guideColor = 0xFF00BCD4.toInt(); cv.selColor = GOLD
-        cv.snapRadius = 10f; cv.snapNodes = true; cv.snapCenters = false; cv.snapEdges = false; cv.freehandEps = 2f; cv.undoLimit = 60; cv.handleScale = 1f; cv.showRulers = true; cv.tapGestures = true
+        cv.snapRadius = 10f; cv.snapNodes = true; cv.snapCenters = false; cv.snapEdges = false; cv.freehandEps = 2f; cv.undoLimit = 60; cv.handleScale = 1f; cv.showRulers = true; cv.tapGestures = true; cv.pressureStroke = true
         panelAlpha = 0.93f; iconDp = 30; applySettings()
     }
 
@@ -705,6 +705,7 @@ class MainActivity : AppCompatActivity() {
         head("View & gestures")
         check("Show rulers (drag from a ruler to make a guide)", { cv.showRulers }, { cv.showRulers = it })
         check("Two-finger tap = undo, three-finger tap = redo", { cv.tapGestures }, { cv.tapGestures = it })
+        check("Stylus pressure changes Freehand width", { cv.pressureStroke }, { cv.pressureStroke = it })
         head("Drawing")
         slider("Freehand smoothing", 1, 10, { cv.freehandEps.toInt() }, { cv.freehandEps = it.toFloat() }, " px")
         slider("Undo steps", 10, 200, { cv.undoLimit }, { cv.undoLimit = it }, "")
@@ -1005,13 +1006,14 @@ class MainActivity : AppCompatActivity() {
     })
 
     private fun editMenu() = menu("Edit", listOf(
-        "Undo" to { cv.undo() }, "Redo" to { cv.redo() }, "Copy" to { cv.copySel() }, "Cut" to { cv.cutSel() }, "Paste" to { cv.paste(false) }, "Paste in place" to { cv.paste(true) }, "Styles…" to { stylesMenu() },
+        "Undo" to { cv.undo() }, "Redo" to { cv.redo() }, "Copy" to { cv.copySel() }, "Cut" to { cv.cutSel() }, "Paste" to { cv.paste(false) }, "Paste in place" to { cv.paste(true) }, "Styles…" to { stylesMenu() }, "Symbols…" to { symbolsMenu() },
         "Convert text to curves" to { if (!cv.textToCurves()) toast("Select a text first (text on a path can't be converted)") },
         "Import font (.ttf / .otf)…" to { openFont.launch(arrayOf("*/*")) }, "Select all" to { cv.selectAll() }, "Duplicate" to { cv.duplicate() }, "Delete" to { cv.deleteSel() },
         "Edit text…" to { cv.sel.firstOrNull { it.kind == Kind.TEXT }?.let { textDialog(it, false) } },
         "Fit text to selected path" to { cv.attachTextToPath() }, "Detach text from path" to { cv.detachText() }))
 
     private fun arrangeMenu() = menu("Arrange / Transform", listOf(
+        "Put inside shape (clip)" to { if (!cv.putInside()) toast("Select the contents plus a closed shape to use as the frame") }, "Release from shape" to { cv.releaseClip() },
         "Step and repeat…" to { stepRepeatDialog() }, "Group" to { cv.group() }, "Ungroup" to { cv.ungroup() }, "Combine (makes holes)" to { cv.combine() }, "Break apart" to { cv.breakApart() },
         "Shape operations…" to { shapeOpsMenu() }, "Align…" to { alignMenu() }, "Distribute…" to { distributeMenu() },
         "Bring to front" to { cv.order(true, false) }, "Send to back" to { cv.order(false, false) },
@@ -1021,6 +1023,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun effectsMenu() = menu("Effects", listOf(
         "Drop shadow on/off" to { val n = !obj().shadow; cv.style.shadow = n; cv.editSel { it.shadow = n } },
+        "Trace bitmap…" to { traceDialog() },
+        "Blend along path (2 shapes + 1 open path)…" to { numDialog("Blend along path", listOf("Steps", "Turn with the path = 1"), listOf(8f, 0f)) { if (!cv.blendAlongPath(it[0].toInt().coerceIn(1, 80), it[1] > 0.5f)) toast("Select two shapes and one open path (the guide)") } },
         "Contour…" to { numDialog("Contour", listOf("Offset per step (mm)", "Steps", "Outward = 1, inward = 0", "Corners: 0 round, 1 sharp, 2 bevel"), listOf(2f, 3f, 1f, 0f)) { cv.contour(it[0], it[1].toInt().coerceIn(1, 40), it[2] > 0.5f, it[3].toInt()) } },
         "Blend (select 2 shapes)…" to { numDialog("Blend", listOf("Steps"), listOf(6f)) { cv.blend(it[0].toInt().coerceIn(1, 60)) } },
         "Extrude (perspective)…" to { numDialog("Perspective extrude", listOf("Depth %", "Vanishing point X offset (mm)", "Vanishing point Y offset (mm)", "Steps"), listOf(40f, 40f, -30f, 20f)) { cv.extrudePersp(it[0], it[1], it[2], it[3].toInt().coerceIn(2, 80)) } },
@@ -1060,6 +1064,43 @@ class MainActivity : AppCompatActivity() {
                 o.font = fontNames[fontSp.selectedItemPosition.coerceIn(0, fontNames.lastIndex)]; o.tRot = f(rotF.text, 0f)
                 cv.commitText(o, isNew)
             }.setNegativeButton("Cancel", null).show()
+    }
+
+    // ---------- trace bitmap / symbol library ----------
+    private fun traceDialog() {
+        numDialog("Trace bitmap", listOf("Threshold % (darker than this is traced)", "Colour levels (1-6)", "Detail (px, 100-1200)", "Smoothing (px)", "Ignore speckles smaller than (px²)", "Curves = 1, sharp lines = 0", "Invert = 1"),
+            listOf(50f, 1f, 500f, 1.2f, 12f, 1f, 0f)) {
+            val n = cv.traceImage(it[0].toInt(), it[1].toInt(), it[2].toInt(), it[3].coerceIn(0.3f, 8f), it[4].coerceAtLeast(0f), it[5] > 0.5f, it[6] > 0.5f)
+            toast(when { n < 0 -> "Import an image first (File → Import image)"; n == 0 -> "Nothing found - try another threshold"; else -> "Traced into $n shapes" })
+        }
+    }
+
+    private fun symbolDir() = java.io.File(filesDir, "symbols").also { it.mkdirs() }
+    private fun symbolNames(): List<String> = symbolDir().listFiles()?.filter { it.extension == "json" }?.map { it.nameWithoutExtension }?.sorted() ?: emptyList()
+
+    private fun symbolsMenu() {
+        val items = mutableListOf<Pair<String, () -> Unit>>("＋ Save selection as symbol…" to { saveSymbolDialog() })
+        for (n in symbolNames()) items.add("▸ $n" to { symbolActions(n) })
+        menu("Symbols", items)
+    }
+
+    private fun saveSymbolDialog() {
+        val d = cv.docOfSelection() ?: run { toast("Select something first"); return }
+        val et = EditText(this).apply { hint = "Symbol name"; setSingleLine() }
+        AlertDialog.Builder(this).setTitle("Save symbol")
+            .setView(FrameLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(et) })
+            .setPositiveButton("Save") { _, _ ->
+                val n = et.text.toString().trim().replace(Regex("[^A-Za-z0-9 _-]"), "_").ifEmpty { "Symbol" }
+                try { java.io.File(symbolDir(), "$n.json").writeText(d.toJson().toString()); toast("Saved symbol “$n”") } catch (e: Exception) { toast("Could not save: ${e.message}") }
+            }.setNegativeButton("Cancel", null).show()
+    }
+
+    private fun symbolActions(name: String) {
+        menu(name, listOf(
+            "Insert in the middle of the view" to {
+                try { cv.insertObjects(Doc.fromJson(JSONObject(java.io.File(symbolDir(), "$name.json").readText())).objs) } catch (e: Exception) { toast("Could not insert: ${e.message}") }
+            },
+            "Delete" to { java.io.File(symbolDir(), "$name.json").delete(); Unit }))
     }
 
     // ---------- view / export selection / step & repeat / saved styles ----------

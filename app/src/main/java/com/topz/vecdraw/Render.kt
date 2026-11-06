@@ -240,10 +240,15 @@ object Render {
         }
     }
 
+    /** The shape an object is clipped to ("put inside"), if any. */
+    fun clipOf(doc: Doc, o: VObj): VObj? = if (o.clipUid == 0) null else doc.objs.firstOrNull { it.uid == o.clipUid && it !== o }
+
     fun drawAll(c: Canvas, doc: Doc) {
         for (o in doc.objs) {
             val l = doc.layers.getOrNull(o.layer) ?: continue
-            if (l.visible && o.visible) drawObj(c, o, l.opacity)
+            if (!(l.visible && o.visible)) continue
+            val cont = clipOf(doc, o)
+            if (cont != null) { c.save(); c.clipPath(cont.path()); drawObj(c, o, l.opacity); c.restore() } else drawObj(c, o, l.opacity)
         }
     }
 }
@@ -367,7 +372,12 @@ object Export {
         var id = 0
         for (o in doc.objs) {
             val l = doc.layers.getOrNull(o.layer) ?: continue
-            if (l.visible && o.visible) sb.append(obj(o, l.opacity, id++))
+            if (l.visible && o.visible) {
+                val cont = Render.clipOf(doc, o)
+                if (cont != null) sb.append("<clipPath id=\"cp$id\"><path d=\"${pathData(cont)}\"${if (cont.holes.isNotEmpty()) " clip-rule=\"evenodd\"" else ""}/></clipPath>\n<g clip-path=\"url(#cp$id)\">\n${obj(o, l.opacity, id)}</g>\n")
+                else sb.append(obj(o, l.opacity, id))
+                id++
+            }
         }
         return sb.append("</svg>\n").toString()
     }

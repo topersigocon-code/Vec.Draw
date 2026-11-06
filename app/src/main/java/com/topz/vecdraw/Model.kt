@@ -39,6 +39,7 @@ class VObj(var kind: Kind = Kind.PATH) {
     var closed = false
     var holes = mutableListOf<SubPath>()   // extra contours (holes / compound parts), filled even-odd
     var group = 0                          // objects sharing a non-zero id select and move together
+    var uid = 0; var clipUid = 0           // clipUid != 0: drawn clipped to the closed shape whose uid matches (live "put inside")
     var fill: Int? = 0xFF3A86FF.toInt()
     var fill2: Int? = null          // gradient end colour (null = uniform fill)
     var gradAngle = 0f
@@ -157,7 +158,7 @@ class VObj(var kind: Kind = Kind.PATH) {
 
     fun copy(): VObj = VObj(kind).also { o ->
         o.nodes = nodes.map { it.copy() }.toMutableList(); o.closed = closed
-        o.holes = holes.map { it.copy() }.toMutableList(); o.group = group
+        o.holes = holes.map { it.copy() }.toMutableList(); o.group = group; o.uid = uid; o.clipUid = clipUid
         o.fill = fill; o.fill2 = fill2; o.gradAngle = gradAngle; o.stroke = stroke; o.strokeW = strokeW
         o.cap = cap; o.join = join; o.dash = dash; o.arrow = arrow; o.alpha = alpha; o.shadow = shadow
         o.layer = layer; o.visible = visible; o.locked = locked
@@ -178,6 +179,8 @@ class VObj(var kind: Kind = Kind.PATH) {
             nodes.forEach { n -> arr.put(JSONArray(listOf(n.x, n.y, n.ix, n.iy, n.ox, n.oy, if (n.smooth) 1f else 0f).map { it.toDouble() })) }
         })
         if (group != 0) put("gr", group)
+        if (uid != 0) put("uid", uid)
+        if (clipUid != 0) put("cu", clipUid)
         if (holes.isNotEmpty()) put("holes", JSONArray().also { ha -> holes.forEach { h -> ha.put(JSONObject().put("c", h.closed).put("n", JSONArray().also { arr -> h.nodes.forEach { arr.put(nodeToJson(it)) } })) } })
         if (fRot != 0f) put("fr", fRot.toDouble())
         if (font.isNotEmpty()) put("fn", font)
@@ -218,7 +221,7 @@ class VObj(var kind: Kind = Kind.PATH) {
                 n.ix = a.getDouble(2).toFloat(); n.iy = a.getDouble(3).toFloat(); n.ox = a.getDouble(4).toFloat(); n.oy = a.getDouble(5).toFloat()
                 n.smooth = a.getDouble(6) > 0.5; o.nodes.add(n)
             }
-            o.group = j.optInt("gr")
+            o.group = j.optInt("gr"); o.uid = j.optInt("uid"); o.clipUid = j.optInt("cu")
             j.optJSONArray("holes")?.let { ha ->
                 for (hi in 0 until ha.length()) {
                     val ho = ha.getJSONObject(hi); val arr = ho.getJSONArray("n"); val ns = mutableListOf<Node>()

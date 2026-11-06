@@ -64,6 +64,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     var handleScale = 1f   // size of touch handles / hit areas
     var showRulers = true; var tapGestures = true
     var lassoMode = 2   // 0 = inside shapes only, 1 = gaps outside shapes only, 2 = anywhere
+    var pressureStroke = true   // stylus pressure gives the Freehand tool a variable width
     private var guideAxis = 0; private var guideIdx = -1; private var guideVal = 0f      // axis 0 = vertical guide (x), 1 = horizontal (y)
     private var maxPtr = 0; private var tapT = 0L; private var tapX = 0f; private var tapY = 0f; private var tapMoved = false; private var gestureScaled = false
     private val rulerPx: Float get() = if (showRulers) 22f * resources.displayMetrics.density else 0f
@@ -86,6 +87,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     private var rotCx = 0f; private var rotCy = 0f
     private var pen: VObj? = null
     private val fh = ArrayList<PointF>()
+    private val fhP = ArrayList<Float>(); private var curPressure = 1f; private var curStylus = false
     private var envQ: FloatArray? = null; private var envB0 = RectF(); private var envOrig: List<VObj> = emptyList()
     private var envSel: List<VObj> = emptyList(); private var envCorner = -1
     private var p3 = 0; private var b1x = 0f; private var b1y = 0f; private var b2x = 0f; private var b2y = 0f
@@ -358,6 +360,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         sd.onTouchEvent(e); gd.onTouchEvent(e)
+        curPressure = e.pressure; curStylus = e.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> { maxPtr = 1; tapT = e.eventTime; tapX = e.x; tapY = e.y; tapMoved = false; gestureScaled = false }
             MotionEvent.ACTION_POINTER_DOWN -> maxPtr = max(maxPtr, e.pointerCount)
@@ -395,7 +398,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
             Tool.PICK -> pickDown(x, y)
             Tool.NODE -> nodeDown(x, y)
             Tool.PEN, Tool.BEZIER, Tool.POLYLINE, Tool.BSPLINE -> penDown(p)
-            Tool.FREEHAND, Tool.SMART -> { fh.clear(); fh.add(PointF(ox0, oy0)); mode = M_FH }
+            Tool.FREEHAND, Tool.SMART -> { fh.clear(); fhP.clear(); fh.add(PointF(ox0, oy0)); fhP.add(curPressure); mode = M_FH }
             Tool.LASSO -> { fh.clear(); fh.add(PointF(ox0, oy0)); mode = M_LASSO }
             Tool.RECT3, Tool.ELLIPSE3 -> mode = if (p3 == 1) M_SHAPE3 else M_SHAPE
             Tool.TEXT -> {
@@ -434,7 +437,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
             M_MESHV -> if (moved) { ensureCk(); meshDrag(rx, ry) }
             M_MESHH -> if (moved) { ensureCk(); meshHandleDrag(rx, ry) }
             M_GUIDE -> guideVal = if (guideAxis == 1) ry else rx
-            M_FH -> fh.add(PointF(rx, ry))
+            M_FH -> { fh.add(PointF(rx, ry)); fhP.add(curPressure) }
             M_LASSO -> fh.add(PointF(rx, ry))
         }
         pdx = rx; pdy = ry; cx = p.x; cy = p.y; lx = x; ly = y
@@ -627,6 +630,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     // ---------- Freehand / Smart drawing ----------
     private fun finishFreehand() {
         if (fh.size < 3) return
+        if (tool == Tool.FREEHAND && pressureStroke && curStylus && fhP.size == fh.size && ((fhP.maxOrNull() ?: 0f) - (fhP.minOrNull() ?: 0f)) > 0.08f) { finishPressure(); return }
         if (tool == Tool.SMART) recognize(fh)?.let { commitNew(it); return }
         val pts = Geo.rdp(fh, freehandEps / scale); if (pts.size < 2) return
         val o = newObj(); o.closed = false; o.fill = null; o.nodes = Geo.smooth(pts, false); commitNew(o)
@@ -762,6 +766,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
         if (sel.isEmpty()) return; checkpoint()
         val gmap = HashMap<Int, Int>(); var next = (doc.objs.maxOfOrNull { it.group } ?: 0) + 1
         val c = doc.objs.filter { it in sel }.map { o -> o.copy().also { d -> d.transform(Matrix().apply { setTranslate(5f, 5f) }); if (d.group != 0) d.group = gmap.getOrPut(d.group) { next++ } } }
+        remapUids(c)
         doc.objs.addAll(c); sel.clear(); sel.addAll(c); changed()
     }
     /** A temporary document that contains just the selection (page = its bounds + 1 mm), used by "Export selection". */
@@ -787,7 +792,9 @@ class VecCanvas(ctx: Context) : View(ctx) {
             val s = Math.pow(sizeK.toDouble(), k.toDouble()).toFloat()
             val m = Matrix(); m.setScale(s, s, cx0, cy0); m.postRotate(rot * k, cx0, cy0); m.postTranslate(dx * k, dy * k)
             val gmap = HashMap<Int, Int>()
-            for (o in items) { val c = o.copy(); c.transform(m); if (c.group != 0) c.group = gmap.getOrPut(c.group) { next++ }; made.add(c) }
+            val batch = ArrayList<VObj>()
+            for (o in items) { val c = o.copy(); c.transform(m); if (c.group != 0) c.group = gmap.getOrPut(c.group) { next++ }; batch.add(c) }
+            remapUids(batch, made); made.addAll(batch)
         }
         doc.objs.addAll(made); sel.clear(); sel.addAll(made); selNode = -1; changed()
     }
@@ -832,6 +839,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
             if (c.group != 0) c.group = gmap.getOrPut(c.group) { next++ }
             c
         }
+        remapUids(made)
         doc.objs.addAll(made); sel.clear(); sel.addAll(made); selNode = -1; changed()
     }
 
@@ -1094,6 +1102,134 @@ class VecCanvas(ctx: Context) : View(ctx) {
         return true
     }
 
+    // ---------- put inside a shape (live clip), blend along a path, trace, symbols, pressure pen ----------
+    private fun remapUids(batch: List<VObj>, extra: List<VObj> = emptyList()) {
+        var next = maxOf(doc.objs.maxOfOrNull { it.uid } ?: 0, extra.maxOfOrNull { it.uid } ?: 0, batch.maxOfOrNull { it.uid } ?: 0) + 1
+        val map = HashMap<Int, Int>()
+        for (c in batch) if (c.uid != 0) { map[c.uid] = next; c.uid = next; next++ }
+        for (c in batch) if (c.clipUid != 0) map[c.clipUid]?.let { c.clipUid = it }
+    }
+
+    /** The top-most selected closed shape becomes a frame; everything else selected is drawn clipped to it (and grouped with it). */
+    fun putInside(): Boolean {
+        val items = doc.objs.filter { it in sel }
+        val cont = items.lastOrNull { it.kind == Kind.PATH && it.closed && it.nodes.size >= 3 } ?: return false
+        if (items.size < 2) return false
+        checkpoint()
+        if (cont.uid == 0) cont.uid = (doc.objs.maxOfOrNull { it.uid } ?: 0) + 1
+        val gid = (doc.objs.maxOfOrNull { it.group } ?: 0) + 1
+        for (o in items) { if (o !== cont) o.clipUid = cont.uid; o.group = gid }
+        doc.objs.remove(cont)
+        val at = items.filter { it !== cont }.minOf { doc.objs.indexOf(it) }
+        doc.objs.add(at.coerceIn(0, doc.objs.size), cont)      // frame sits behind its contents
+        changed(); return true
+    }
+
+    /** Remove the clip from the selected contents (or from all contents of a selected frame) and ungroup them. */
+    fun releaseClip() {
+        val ids = sel.filter { it.uid != 0 }.map { it.uid }.toSet()
+        val targets = doc.objs.filter { it.clipUid != 0 && (it in sel || it.clipUid in ids) }
+        if (targets.isEmpty()) return
+        checkpoint()
+        val gids = targets.map { it.group }.filter { it != 0 }.toSet()
+        targets.forEach { it.clipUid = 0 }
+        doc.objs.forEach { if (it.group in gids) it.group = 0 }
+        changed()
+    }
+
+    /** Blend two shapes with the steps spread along the selected open path (the guide), optionally turning with the path. */
+    fun blendAlongPath(steps: Int, rotate: Boolean): Boolean {
+        val ps = doc.objs.filter { it in sel && it.kind == Kind.PATH && it.nodes.size >= 2 }
+        val guide = ps.firstOrNull { !it.closed } ?: return false
+        val others = ps.filter { it !== guide }; if (others.size < 2) return false
+        val a = others[0]; val b = others[1]
+        val n = 64; val pa = Geo.flatten(a.path(), 1f); val pb = Geo.flatten(b.path(), 1f)
+        if (pa.size < 2 || pb.size < 2) return false
+        val pm = PathMeasure(guide.path(), false); val len = pm.length; if (len <= 0f) return false
+        checkpoint()
+        fun at(l: List<PointF>, i: Int): PointF = l[(i * (l.size - 1)) / (n - 1)]
+        val both = a.closed && b.closed; val ins = doc.objs.indexOf(a) + 1; val made = mutableListOf<VObj>()
+        val pos = FloatArray(2); val tan = FloatArray(2)
+        for (k in 1..steps) {
+            val t = k.toFloat() / (steps + 1)
+            pm.getPosTan(len * t, pos, tan)
+            val raw = List(n) { i -> val p = at(pa, i); val q = at(pb, i); PointF(p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t) }
+            val cx0 = (raw.minOf { it.x } + raw.maxOf { it.x }) / 2f; val cy0 = (raw.minOf { it.y } + raw.maxOf { it.y }) / 2f
+            val ang = if (rotate) Math.toDegrees(atan2(tan[1].toDouble(), tan[0].toDouble())).toFloat() else 0f
+            val mt = Matrix().apply { setTranslate(pos[0] - cx0, pos[1] - cy0); if (rotate) postRotate(ang, pos[0], pos[1]) }
+            val arr = FloatArray(n * 2); for (i in 0 until n) { arr[i * 2] = raw[i].x; arr[i * 2 + 1] = raw[i].y }
+            mt.mapPoints(arr)
+            val pts = List(n) { PointF(arr[it * 2], arr[it * 2 + 1]) }
+            val o = a.copy(); o.shadow = false; o.group = 0; o.uid = 0; o.clipUid = 0; o.holes = mutableListOf(); o.closed = both
+            o.nodes = Geo.smooth(Geo.rdp(pts, 0.05f).let { if (it.size < 3) pts else it }, both)
+            val fa = a.fill; val fb = b.fill; o.fill = if (fa != null && fb != null) lerpColor(fa, fb, t) else fa
+            val sa = a.stroke; val sb2 = b.stroke; o.stroke = if (sa != null && sb2 != null) lerpColor(sa, sb2, t) else sa
+            o.strokeW = a.strokeW + (b.strokeW - a.strokeW) * t; made.add(o)
+        }
+        doc.objs.addAll(ins.coerceIn(0, doc.objs.size), made); changed(); return true
+    }
+
+    /** Trace the selected image (or the top-most image in the document) into vector shapes. Returns the shape count, -1 if there is no image. */
+    fun traceImage(thresholdPct: Int, levels: Int, detail: Int, eps: Float, minArea: Float, smooth: Boolean, invert: Boolean): Int {
+        val img = sel.firstOrNull { it.kind == Kind.IMAGE && it.bmp != null } ?: doc.objs.lastOrNull { it.kind == Kind.IMAGE && it.bmp != null } ?: return -1
+        val res = Trace.run(img.bmp!!, img.rect, img.tRot, thresholdPct, levels, eps, minArea, invert, detail)
+        val made = ArrayList<VObj>(); val gid = (doc.objs.maxOfOrNull { it.group } ?: 0) + 1
+        fun nodesOf(p: List<PointF>) = if (smooth) Geo.smooth(p, true) else p.map { Node(it.x, it.y) }.toMutableList()
+        for (lv in res) for (sh in lv.shapes) {
+            val o = newObj(); o.stroke = null; o.fill = lv.color; o.fill2 = null; o.closed = true; o.group = gid
+            o.nodes = nodesOf(sh.outer); sh.holes.forEach { o.holes.add(SubPath(nodesOf(it), true)) }
+            made.add(o)
+        }
+        if (made.isEmpty()) return 0
+        if (made.size == 1) made[0].group = 0
+        checkpoint(); doc.objs.addAll(made); sel.clear(); sel.addAll(made); selNode = -1; changed()
+        return made.size
+    }
+
+    /** Insert objects (for example a saved symbol) centred in the visible canvas, on the active layer, with fresh group / frame ids. */
+    fun insertObjects(objs: List<VObj>) {
+        if (objs.isEmpty()) return
+        val b = RectF(objs[0].bounds()); objs.forEach { b.union(it.bounds()) }
+        val rh = rulerPx; val m = Matrix().apply { setTranslate(docX((width + rh) / 2f) - b.centerX(), docY((height + rh) / 2f) - b.centerY()) }
+        checkpoint()
+        val made = objs.map { it.copy() }
+        made.forEach { it.transform(m); it.layer = activeLayer.coerceIn(0, doc.layers.lastIndex) }
+        val gmap = HashMap<Int, Int>(); var next = (doc.objs.maxOfOrNull { it.group } ?: 0) + 1
+        made.forEach { if (it.group != 0) it.group = gmap.getOrPut(it.group) { next++ } }
+        remapUids(made)
+        doc.objs.addAll(made); sel.clear(); sel.addAll(made); selNode = -1; changed()
+    }
+
+    /** Stylus freehand: a filled outline whose width follows the pen pressure (round caps). */
+    private fun finishPressure() {
+        val pts = ArrayList<PointF>(); val ps = ArrayList<Float>()
+        for (i in fh.indices) if (pts.isEmpty() || hypot(fh[i].x - pts.last().x, fh[i].y - pts.last().y) >= 0.4f) { pts.add(fh[i]); ps.add(fhP[i]) }
+        if (pts.size < 2) return
+        val last = pts.size - 1
+        val maxW = max(style.strokeW, 0.3f) * 6f
+        val half = FloatArray(pts.size) { i -> val sp = (ps[max(0, i - 1)] + ps[i] + ps[min(last, i + 1)]) / 3f; maxW * (0.15f + 0.85f * sp.coerceIn(0f, 1f)) / 2f }
+        val left = ArrayList<PointF>(); val right = ArrayList<PointF>(); val nxs = FloatArray(pts.size); val nys = FloatArray(pts.size)
+        for (i in pts.indices) {
+            val a = pts[max(0, i - 1)]; val b = pts[min(last, i + 1)]
+            var dx = b.x - a.x; var dy = b.y - a.y; val l = hypot(dx, dy)
+            if (l < 1e-6f) { dx = 1f; dy = 0f } else { dx /= l; dy /= l }
+            nxs[i] = -dy; nys[i] = dx
+            left.add(PointF(pts[i].x + nxs[i] * half[i], pts[i].y + nys[i] * half[i])); right.add(PointF(pts[i].x - nxs[i] * half[i], pts[i].y - nys[i] * half[i]))
+        }
+        val outline = ArrayList<PointF>(left)
+        // end cap (left -> right around the front), then back along the right side, then the start cap
+        val ex = nys[last]; val ey = -nxs[last]            // forward direction at the end
+        for (k in 1..4) { val th = Math.PI * k / 5; val c = Math.cos(th).toFloat(); val s = Math.sin(th).toFloat()
+            outline.add(PointF(pts[last].x + half[last] * (c * nxs[last] + s * ex), pts[last].y + half[last] * (c * nys[last] + s * ey))) }
+        for (i in last downTo 0) outline.add(right[i])
+        val sx = -nys[0]; val sy = nxs[0]                  // backward direction at the start
+        for (k in 1..4) { val th = Math.PI * k / 5; val c = Math.cos(th).toFloat(); val s = Math.sin(th).toFloat()
+            outline.add(PointF(pts[0].x + half[0] * (-c * nxs[0] + s * sx), pts[0].y + half[0] * (-c * nys[0] + s * sy))) }
+        val o = newObj(); o.closed = true; o.fill = style.stroke ?: style.fill ?: Color.BLACK; o.fill2 = null; o.stroke = null
+        o.nodes = Geo.rdp(outline, 0.03f).map { Node(it.x, it.y) }.toMutableList()
+        if (o.nodes.size >= 3) commitNew(o)
+    }
+
     // ---------- Mesh fill ----------
     private fun meshObj(): VObj? = sel.firstOrNull { it.kind == Kind.PATH && it.closed }
 
@@ -1281,7 +1417,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
                 val len = pm.length; if (len <= 0.5f) continue
                 val n = max(8, min(1500, (len / 0.25f).toInt())); val pos = FloatArray(2)
                 val pts = List(n) { k -> pm.getPosTan(len * k / n, pos, null); PointF(pos[0], pos[1]) }
-                val c = o.copy(); c.shadow = false; c.group = 0; c.mesh = null; c.meshPos = null; c.meshH = null; c.fill2 = null; c.tMode = 0; c.holes = mutableListOf()
+                val c = o.copy(); c.shadow = false; c.group = 0; c.uid = 0; c.mesh = null; c.meshPos = null; c.meshH = null; c.fill2 = null; c.tMode = 0; c.holes = mutableListOf()
                 c.nodes = Geo.rdp(pts, 0.02f).map { Node(it.x, it.y) }.toMutableList(); c.closed = true
                 c.fill = o.fill?.let { Render.mix(it, Color.WHITE, t * 0.7f) }
                 made.add(c); got = true
@@ -1305,7 +1441,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
         for (k in 1..steps) {
             val t = k.toFloat() / (steps + 1)
             val pts = List(n) { i -> val p = at(pa, i); val q = at(pb, i); PointF(p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t) }
-            val o = a.copy(); o.shadow = false; o.group = 0; o.holes = mutableListOf(); o.closed = both
+            val o = a.copy(); o.shadow = false; o.group = 0; o.uid = 0; o.holes = mutableListOf(); o.closed = both
             o.nodes = Geo.smooth(Geo.rdp(pts, 0.05f).let { if (it.size < 3) pts else it }, both)
             val fa = a.fill; val fb = b.fill; o.fill = if (fa != null && fb != null) lerpColor(fa, fb, t) else fa
             val sa = a.stroke; val sb2 = b.stroke; o.stroke = if (sa != null && sb2 != null) lerpColor(sa, sb2, t) else sa
@@ -1321,7 +1457,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
         val at = doc.objs.indexOf(o); val made = mutableListOf<VObj>(); val d = (depthPct / 100f).coerceIn(0.02f, 0.95f)
         for (i in steps downTo 1) {
             val f = i.toFloat() / steps; val s = 1f - d * f
-            val c = o.copy(); c.shadow = false; c.group = 0; c.transform(Matrix().apply { setScale(s, s, vx, vy) }); c.fRot = o.fRot
+            val c = o.copy(); c.shadow = false; c.group = 0; c.uid = 0; c.transform(Matrix().apply { setScale(s, s, vx, vy) }); c.fRot = o.fRot
             val shade = 0.25f + 0.35f * f
             c.fill = o.fill?.let { lerpColor(it, Color.BLACK, shade) }; c.fill2 = null; c.mesh = null
             c.stroke = o.stroke?.let { lerpColor(it, Color.BLACK, shade) }; made.add(c)
@@ -1335,7 +1471,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
         val at = doc.objs.indexOf(o); val a = Math.toRadians(angleDeg.toDouble()); val made = mutableListOf<VObj>()
         for (i in steps downTo 1) {
             val f = i.toFloat() / steps
-            val c = o.copy(); c.shadow = false; c.group = 0
+            val c = o.copy(); c.shadow = false; c.group = 0; c.uid = 0
             c.transform(Matrix().apply { setTranslate((cos(a) * depth * f).toFloat(), (sin(a) * depth * f).toFloat()) })
             val shade = 0.25f + 0.35f * f
             c.fill = o.fill?.let { lerpColor(it, Color.BLACK, shade) }; c.fill2 = null
