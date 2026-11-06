@@ -50,6 +50,106 @@ object Trace {
         return out
     }
 
+    class Line(val pts: List<PointF>)
+    class Center(val lines: List<Line>, val widthMm: Float)
+
+    /** Centerline trace: thins the dark strokes to one-pixel skeletons and follows them as open polylines (for lines, signatures, line art). */
+    fun centerline(src: Bitmap, rect: RectF, rot: Float, thresholdPct: Int, eps: Float, minLen: Float, invert: Boolean, detail: Int): Center {
+        val sc = min(1f, detail.coerceIn(100, 1200).toFloat() / max(src.width, src.height))
+        val w = max(6, (src.width * sc).toInt()); val h = max(6, (src.height * sc).toInt())
+        val bmp = if (w == src.width && h == src.height) src else Bitmap.createScaledBitmap(src, w, h, true)
+        val px = IntArray(w * h); bmp.getPixels(px, 0, w, 0, 0, w, h)
+        val thr = thresholdPct.coerceIn(1, 99) / 100f
+        val sk = BooleanArray(w * h) { i ->
+            val p = px[i]; val a = Color.alpha(p) / 255f
+            val l = (0.299f * Color.red(p) + 0.587f * Color.green(p) + 0.114f * Color.blue(p)) / 255f
+            val v = l * a + (1f - a)
+            (if (invert) 1f - v else v) < thr
+        }
+        for (x in 0 until w) { sk[x] = false; sk[(h - 1) * w + x] = false }
+        for (y in 0 until h) { sk[y * w] = false; sk[y * w + w - 1] = false }
+        val area = sk.count { it }
+        thin(sk, w, h)
+        val skelCount = sk.count { it }
+        val m = Matrix().apply {
+            setRectToRect(RectF(0f, 0f, w.toFloat(), h.toFloat()), rect, Matrix.ScaleToFit.FILL)
+            if (rot != 0f) postRotate(rot, rect.centerX(), rect.centerY())
+        }
+        val widthMm = ((area.toFloat() / max(1, skelCount)) * rect.width() / w).coerceIn(0.1f, 40f)
+        if (skelCount == 0) return Center(emptyList(), widthMm)
+        val offs = intArrayOf(-w - 1, -w, -w + 1, -1, 1, w - 1, w, w + 1)
+        val deg = IntArray(w * h)
+        for (i in 0 until w * h) if (sk[i]) { var d = 0; for (o in offs) if (sk[i + o]) d++; deg[i] = d }
+        val seen = BooleanArray(w * h); val done = HashSet<Long>(); val chains = ArrayList<List<Int>>(); val big = (w * h).toLong()
+        fun key(a: Int, b: Int) = min(a, b).toLong() * big + max(a, b)
+        fun walk(start: Int, first: Int): List<Int> {
+            val ch = ArrayList<Int>(); ch.add(start); var prev = start; var cur = first
+            while (true) {
+                ch.add(cur)
+                if (deg[cur] != 2 || seen[cur]) break
+                seen[cur] = true
+                var next = -1
+                for (o in offs) { val q = cur + o; if (sk[q] && q != prev) { next = q; break } }
+                if (next < 0) break
+                prev = cur; cur = next
+            }
+            return ch
+        }
+        for (i in 0 until w * h) {
+            if (!sk[i] || deg[i] == 2) continue
+            for (o in offs) {
+                val q = i + o
+                if (!sk[q] || key(i, q) in done || (deg[q] == 2 && seen[q])) continue
+                val ch = walk(i, q); done.add(key(i, q)); if (ch.size >= 2) done.add(key(ch[ch.size - 2], ch[ch.size - 1]))
+                chains.add(ch)
+            }
+        }
+        for (i in 0 until w * h) {                       // closed rings without any end or junction
+            if (!sk[i] || deg[i] != 2 || seen[i]) continue
+            var first = -1; for (o in offs) if (sk[i + o]) { first = i + o; break }
+            if (first < 0) continue
+            seen[i] = true; chains.add(walk(i, first))
+        }
+        fun map(p: List<PointF>): List<PointF> {
+            val a = FloatArray(p.size * 2); for (i in p.indices) { a[i * 2] = p[i].x; a[i * 2 + 1] = p[i].y }
+            m.mapPoints(a); return List(p.size) { PointF(a[it * 2], a[it * 2 + 1]) }
+        }
+        val lines = ArrayList<Line>()
+        for (ch in chains) {
+            val a = ch.first(); val b = ch.last()
+            val spur = (deg[a] == 1 && deg[b] >= 3) || (deg[b] == 1 && deg[a] >= 3)
+            if (ch.size < minLen || (spur && ch.size < max(minLen, 6f))) continue
+            val s = Geo.rdp(ch.map { PointF((it % w) + 0.5f, (it / w) + 0.5f) }, eps); if (s.size < 2) continue
+            lines.add(Line(map(s)))
+        }
+        return Center(lines, widthMm)
+    }
+
+    /** Zhang-Suen thinning (in place). The outer pixel border must be false. */
+    private fun thin(m: BooleanArray, w: Int, h: Int) {
+        val del = ArrayList<Int>(); var changed = true; var guard = 0
+        while (changed && guard < 80) {
+            changed = false; guard++
+            for (pass in 0..1) {
+                del.clear()
+                for (y in 1 until h - 1) for (x in 1 until w - 1) {
+                    val i = y * w + x; if (!m[i]) continue
+                    val p2 = m[i - w]; val p3 = m[i - w + 1]; val p4 = m[i + 1]; val p5 = m[i + w + 1]; val p6 = m[i + w]; val p7 = m[i + w - 1]; val p8 = m[i - 1]; val p9 = m[i - w - 1]
+                    var b = 0; if (p2) b++; if (p3) b++; if (p4) b++; if (p5) b++; if (p6) b++; if (p7) b++; if (p8) b++; if (p9) b++
+                    if (b < 2 || b > 6) continue
+                    var a = 0
+                    if (!p2 && p3) a++; if (!p3 && p4) a++; if (!p4 && p5) a++; if (!p5 && p6) a++
+                    if (!p6 && p7) a++; if (!p7 && p8) a++; if (!p8 && p9) a++; if (!p9 && p2) a++
+                    if (a != 1) continue
+                    if (pass == 0) { if (p2 && p4 && p6) continue; if (p4 && p6 && p8) continue }
+                    else { if (p2 && p4 && p8) continue; if (p2 && p6 && p8) continue }
+                    del.add(i)
+                }
+                if (del.isNotEmpty()) { changed = true; for (i in del) m[i] = false }
+            }
+        }
+    }
+
     /** Closed loops of vertex indices around the true pixels (foreground kept on the right-hand side of every edge). */
     private fun contours(mk: BooleanArray, w: Int, h: Int): List<IntArray> {
         val w1 = w + 1; val nv = w1 * (h + 1)

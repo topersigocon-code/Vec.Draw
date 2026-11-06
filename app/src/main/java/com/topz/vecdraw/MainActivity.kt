@@ -16,6 +16,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContract
@@ -1067,12 +1068,67 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---------- trace bitmap / symbol library ----------
+    /** Trace panel: sits at the bottom, canvas stays visible and shows a live preview (computed off the UI thread) as you change the settings. */
     private fun traceDialog() {
-        numDialog("Trace bitmap", listOf("Threshold % (darker than this is traced)", "Colour levels (1-6)", "Detail (px, 100-1200)", "Smoothing (px)", "Ignore speckles smaller than (px²)", "Curves = 1, sharp lines = 0", "Invert = 1"),
-            listOf(50f, 1f, 500f, 1.2f, 12f, 1f, 0f)) {
-            val n = cv.traceImage(it[0].toInt(), it[1].toInt(), it[2].toInt(), it[3].coerceIn(0.3f, 8f), it[4].coerceAtLeast(0f), it[5] > 0.5f, it[6] > 0.5f)
-            toast(when { n < 0 -> "Import an image first (File → Import image)"; n == 0 -> "Nothing found - try another threshold"; else -> "Traced into $n shapes" })
+        val img = cv.traceTarget() ?: run { toast("Import an image first (File → Import image)"); return }
+        var gen = 0
+        var thr = 50; var levels = 1; var detail = 500; var smooth10 = 12; var speck = 12
+        var curves = true; var invert = false; var center = false; var hideImg = false
+        val handler = android.os.Handler(mainLooper)
+        val update = Runnable {
+            val my = ++gen
+            val bmp = img.bmp ?: return@Runnable
+            val d = minOf(detail, 320); val k = d.toFloat() / detail
+            val eps = maxOf(0.3f, smooth10 / 10f * k); val minA = speck * k * k
+            val rect = RectF(img.rect); val rot = img.tRot
+            val t0 = thr; val lv0 = levels; val inv = invert; val cen = center; val hide = if (hideImg) img else null
+            Thread {
+                val outline = if (!cen) Trace.run(bmp, rect, rot, t0, lv0, eps, minA, inv, d) else null
+                val line = if (cen) Trace.centerline(bmp, rect, rot, t0, eps, maxOf(3f, speck * k), inv, d) else null
+                runOnUiThread {
+                    if (my == gen) { if (outline != null) cv.setPreviewOutline(outline, hide) else if (line != null) cv.setPreviewCenter(line, hide) }
+                }
+            }.start()
         }
+        fun schedule() { handler.removeCallbacks(update); handler.postDelayed(update, 300) }
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(4), dp(16), dp(4)) }
+        fun sl(name: String, lo: Int, hi: Int, init: Int, unit: String, onSet: (Int) -> Unit) {
+            val tv = TextView(this).apply { text = "$name: $init$unit"; textSize = 12f }
+            val sb = SeekBar(this); sb.max = hi - lo; sb.progress = (init - lo).coerceIn(0, hi - lo)
+            sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar, p: Int, u: Boolean) { onSet(p + lo); tv.text = "$name: ${p + lo}$unit"; if (u) schedule() }
+                override fun onStartTrackingTouch(s: SeekBar) {}
+                override fun onStopTrackingTouch(s: SeekBar) {}
+            })
+            col.addView(tv); col.addView(sb)
+        }
+        fun cb(name: String, init: Boolean, onSet: (Boolean) -> Unit) {
+            col.addView(CheckBox(this).apply { text = name; isChecked = init; textSize = 13f; setOnCheckedChangeListener { _, v -> onSet(v); schedule() } })
+        }
+        cb("Centerline (single lines) instead of outline shapes", center) { center = it }
+        sl("Threshold (darker than this is traced)", 1, 99, thr, "%") { thr = it }
+        sl("Colour levels (outline mode)", 1, 6, levels, "") { levels = it }
+        sl("Smoothing (tenths of a px)", 3, 60, smooth10, "") { smooth10 = it }
+        sl("Ignore speckles / short bits below", 0, 200, speck, " px") { speck = it }
+        sl("Final detail", 100, 1200, detail, " px") { detail = it }
+        cb("Smooth curves (off = sharp straight lines)", curves) { curves = it }
+        cb("Invert", invert) { invert = it }
+        cb("Hide the original image in the preview", hideImg) { hideImg = it }
+        val sv = ScrollView(this).apply { addView(col) }
+        val dlg = AlertDialog.Builder(this).setTitle("Trace bitmap - live preview")
+            .setView(FrameLayout(this).apply { addView(sv, FrameLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.36f).toInt())) })
+            .setPositiveButton("Trace") { _, _ ->
+                handler.removeCallbacks(update); gen++; cv.clearTracePreview()
+                val n = if (center) cv.traceCenterline(thr, detail, smooth10 / 10f, maxOf(3f, speck.toFloat()), curves, invert)
+                        else cv.traceImage(thr, levels, detail, smooth10 / 10f, speck.toFloat(), curves, invert)
+                toast(when { n < 0 -> "Import an image first (File → Import image)"; n == 0 -> "Nothing found - try another threshold"; else -> "Traced into $n ${if (center) "lines" else "shapes"}" })
+            }
+            .setNegativeButton("Cancel", null).create()
+        dlg.setCanceledOnTouchOutside(false)
+        dlg.setOnDismissListener { handler.removeCallbacks(update); gen++; cv.clearTracePreview() }
+        dlg.window?.let { w -> w.setGravity(Gravity.BOTTOM); w.setDimAmount(0f); w.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL) }
+        dlg.show()
+        schedule()
     }
 
     private fun symbolDir() = java.io.File(filesDir, "symbols").also { it.mkdirs() }

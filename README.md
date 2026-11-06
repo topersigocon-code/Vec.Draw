@@ -19,3 +19,4 @@ Group / Ungroup, Copy / Cut / Paste (+ in place), Align and Distribute (groups m
 Rulers with drag-out guides (drag a guide back onto its ruler to delete it), View menu (zoom to page / selection / 100%), Export selection, Step and repeat, saved Styles, two-finger tap = undo / three-finger tap = redo.
 Lasso fill tool (tap a region = smart fill, drag a loop = lasso, modes via long-press), fonts (built-in + imported .ttf/.otf, embedded in SVG), text and image rotation, convert text to curves, radial gradients and a middle colour stop.
 Batch A: Trace bitmap (threshold / colour levels, holes), Put inside shape (live clip, also for text and images; Release from shape), Blend along path, Symbols library (saved in app storage), stylus pressure for Freehand.
+Trace bitmap now has a live preview panel (canvas stays visible; computed off the UI thread) and a centerline mode (thinning -> open stroked lines).

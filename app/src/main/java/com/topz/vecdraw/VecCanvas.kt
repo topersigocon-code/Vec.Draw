@@ -39,6 +39,9 @@ enum class Tool(val label: String, val icon: String) {
     TRANS("Transparency", "~M12 3C12 3 5 11 5 15a7 7 0 0 0 14 0C19 11 12 3 12 3z|M12 3C12 3 5 11 5 15a7 7 0 0 0 14 0C19 11 12 3 12 3z|M12 19a4 4 0 0 1-4-4")
 }
 
+/** One piece of the live trace preview: filled (strokeW = 0) or stroked outline. */
+class PrevItem(val path: Path, val color: Int, val strokeW: Float)
+
 class VecCanvas(ctx: Context) : View(ctx) {
     companion object {
         const val M_NONE = 0; const val M_PAN = 1; const val M_MOVE = 2; const val M_SCALE = 3; const val M_ROT = 4
@@ -87,6 +90,8 @@ class VecCanvas(ctx: Context) : View(ctx) {
     private var rotCx = 0f; private var rotCy = 0f
     private var pen: VObj? = null
     private val fh = ArrayList<PointF>()
+    private var tracePrev: List<PrevItem> = emptyList(); private var traceCover: Path? = null
+    private val tracePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val fhP = ArrayList<Float>(); private var curPressure = 1f; private var curStylus = false
     private var envQ: FloatArray? = null; private var envB0 = RectF(); private var envOrig: List<VObj> = emptyList()
     private var envSel: List<VObj> = emptyList(); private var envCorner = -1
@@ -219,6 +224,12 @@ class VecCanvas(ctx: Context) : View(ctx) {
             var y = 0f; while (y <= doc.h + 0.001f) { c.drawLine(0f, y, doc.w, y, gridPaint); y += doc.grid }
         }
         Render.drawAll(c, doc)
+        traceCover?.let { tracePaint.style = Paint.Style.FILL; tracePaint.color = Color.WHITE; tracePaint.alpha = 255; c.drawPath(it, tracePaint) }
+        for (pi in tracePrev) {
+            if (pi.strokeW > 0f) { tracePaint.style = Paint.Style.STROKE; tracePaint.strokeWidth = pi.strokeW; tracePaint.strokeCap = Paint.Cap.ROUND; tracePaint.strokeJoin = Paint.Join.ROUND }
+            else tracePaint.style = Paint.Style.FILL
+            tracePaint.color = pi.color; tracePaint.alpha = 200; c.drawPath(pi.path, tracePaint)
+        }
         doc.vg.forEach { c.drawLine(it, -5000f, it, 5000f, guidePaint) }
         doc.hg.forEach { c.drawLine(-5000f, it, 5000f, it, guidePaint) }
         pv.strokeWidth = 1.5f / scale; pv.pathEffect = DashPathEffect(floatArrayOf(6f / scale, 4f / scale), 0f)
@@ -1169,9 +1180,56 @@ class VecCanvas(ctx: Context) : View(ctx) {
         doc.objs.addAll(ins.coerceIn(0, doc.objs.size), made); changed(); return true
     }
 
+    // ---------- live trace preview ----------
+    fun traceTarget(): VObj? = sel.firstOrNull { it.kind == Kind.IMAGE && it.bmp != null } ?: doc.objs.lastOrNull { it.kind == Kind.IMAGE && it.bmp != null }
+
+    private fun coverPath(img: VObj?): Path? {
+        if (img == null) return null
+        val p = Path(); p.addRect(img.rect, Path.Direction.CW)
+        if (img.tRot != 0f) p.transform(Matrix().apply { setRotate(img.tRot, img.rect.centerX(), img.rect.centerY()) })
+        return p
+    }
+
+    private fun addPoly(p: Path, pts: List<PointF>) { if (pts.size < 3) return; p.moveTo(pts[0].x, pts[0].y); for (i in 1 until pts.size) p.lineTo(pts[i].x, pts[i].y); p.close() }
+
+    fun setPreviewOutline(levels: List<Trace.Level>, hide: VObj?) {
+        val items = ArrayList<PrevItem>()
+        for (lv in levels) {
+            val p = Path(); p.fillType = Path.FillType.EVEN_ODD
+            for (sh in lv.shapes) { addPoly(p, sh.outer); sh.holes.forEach { addPoly(p, it) } }
+            items.add(PrevItem(p, lv.color, 0f))
+        }
+        tracePrev = items; traceCover = coverPath(hide); invalidate()
+    }
+
+    fun setPreviewCenter(c: Trace.Center, hide: VObj?) {
+        val p = Path()
+        for (l in c.lines) { if (l.pts.size < 2) continue; p.moveTo(l.pts[0].x, l.pts[0].y); for (i in 1 until l.pts.size) p.lineTo(l.pts[i].x, l.pts[i].y) }
+        tracePrev = listOf(PrevItem(p, Color.BLACK, c.widthMm)); traceCover = coverPath(hide); invalidate()
+    }
+
+    fun clearTracePreview() { tracePrev = emptyList(); traceCover = null; invalidate() }
+
+    /** Centerline trace into open stroked paths (single colour). Returns the number of lines, -1 if there is no image. */
+    fun traceCenterline(thresholdPct: Int, detail: Int, eps: Float, minLen: Float, smooth: Boolean, invert: Boolean): Int {
+        val img = traceTarget() ?: return -1
+        val res = Trace.centerline(img.bmp!!, img.rect, img.tRot, thresholdPct, eps, minLen, invert, detail)
+        val made = ArrayList<VObj>(); val gid = (doc.objs.maxOfOrNull { it.group } ?: 0) + 1
+        for (l in res.lines) {
+            if (l.pts.size < 2) continue
+            val o = newObj(); o.fill = null; o.fill2 = null; o.stroke = Color.BLACK; o.strokeW = res.widthMm; o.cap = 0; o.join = 0; o.closed = false; o.group = gid
+            o.nodes = if (smooth) Geo.smooth(l.pts, false) else l.pts.map { Node(it.x, it.y) }.toMutableList()
+            made.add(o)
+        }
+        if (made.isEmpty()) return 0
+        if (made.size == 1) made[0].group = 0
+        checkpoint(); doc.objs.addAll(made); sel.clear(); sel.addAll(made); selNode = -1; changed()
+        return made.size
+    }
+
     /** Trace the selected image (or the top-most image in the document) into vector shapes. Returns the shape count, -1 if there is no image. */
     fun traceImage(thresholdPct: Int, levels: Int, detail: Int, eps: Float, minArea: Float, smooth: Boolean, invert: Boolean): Int {
-        val img = sel.firstOrNull { it.kind == Kind.IMAGE && it.bmp != null } ?: doc.objs.lastOrNull { it.kind == Kind.IMAGE && it.bmp != null } ?: return -1
+        val img = traceTarget() ?: return -1
         val res = Trace.run(img.bmp!!, img.rect, img.tRot, thresholdPct, levels, eps, minArea, invert, detail)
         val made = ArrayList<VObj>(); val gid = (doc.objs.maxOfOrNull { it.group } ?: 0) + 1
         fun nodesOf(p: List<PointF>) = if (smooth) Geo.smooth(p, true) else p.map { Node(it.x, it.y) }.toMutableList()
