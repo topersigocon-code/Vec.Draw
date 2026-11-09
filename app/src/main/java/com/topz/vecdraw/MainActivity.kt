@@ -135,6 +135,7 @@ class Dockable(ctx: Context, val title: String, val content: View, closable: Boo
     private val grip = TextView(ctx).apply { text = "◢"; setTextColor(GOLD); textSize = 14f; setPadding(ctx.dp(8), ctx.dp(2), ctx.dp(8), ctx.dp(2)) }
     private val minBtn: TextView? = if (closable) TextView(ctx).apply { text = "—"; setTextColor(Color.WHITE); textSize = 14f; setPadding(ctx.dp(8), 0, ctx.dp(4), 0) } else null
     private var lent = false; private var lentLp: ViewGroup.LayoutParams? = null; private var lentVert = false
+    private var lentHidden = false
 
     init {
         orientation = VERTICAL; background = bg
@@ -199,8 +200,8 @@ class Dockable(ctx: Context, val title: String, val content: View, closable: Boo
 
     /** Temporarily hand the panel's real content to a flyout (adaptive strips become a tall list); give it back with returnContent(). */
     fun lendContent(): View? {
-        if (lent || collapsed) return null
-        lent = true; lentLp = content.layoutParams; removeView(content)
+        if (lent) return null
+        lent = true; lentHidden = content.visibility != View.VISIBLE; content.visibility = View.VISIBLE; lentLp = content.layoutParams; removeView(content)
         (content as? AdaptiveScroll)?.let { lentVert = it.isVerticalNow(); it.setVertical(true) }
         return content
     }
@@ -210,6 +211,7 @@ class Dockable(ctx: Context, val title: String, val content: View, closable: Boo
         lent = false
         (content.parent as? ViewGroup)?.removeView(content)
         (content as? AdaptiveScroll)?.setVertical(lentVert)
+        if (lentHidden) content.visibility = View.GONE
         addView(content, lentLp ?: LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
 
@@ -259,8 +261,10 @@ class MainActivity : AppCompatActivity() {
         addPanel("Objects", objectManager(), true)
         addPanel("Status", statusBar(), true)
         addPanel("Quick", quickBar(), false)
-        cv.onStatus = { statusTv.text = it }
+        cv.onStatus = { statusTv.text = it; fullStatus?.text = it }
         applyPanelPrefs()
+        refreshers.add { updateFullUi() }
+        cv.onTouching = { fadeFull(it) }
         root.doOnLayout { cv.fit(); layoutPanels(); refreshers.forEach { it() } }
     }
 
@@ -273,9 +277,9 @@ class MainActivity : AppCompatActivity() {
         if (!::cv.isInitialized) return
         try {
             val f = autosaveFile()
-            if (cv.doc.objs.isEmpty()) { f.delete(); return }
+            if (cv.pages.size == 1 && cv.doc.objs.isEmpty()) { f.delete(); return }
             val tmp = java.io.File(filesDir, "autosave.tmp")
-            tmp.writeText(cv.doc.toJson().toString())
+            tmp.writeText(cv.projectJson().toString())
             if (!tmp.renameTo(f)) { f.delete(); tmp.renameTo(f) }
             getSharedPreferences("vd", MODE_PRIVATE).edit().putInt("activeLayer", cv.activeLayer).apply()
         } catch (e: Throwable) { }
@@ -284,15 +288,15 @@ class MainActivity : AppCompatActivity() {
     private fun restoreDoc() {
         val f = autosaveFile(); if (!f.exists()) return
         try {
-            cv.newDoc(Doc.fromJson(JSONObject(f.readText())))
+            val (pl, pc) = Project.fromJson(JSONObject(f.readText())); cv.loadProject(pl, pc)
             cv.activeLayer = getSharedPreferences("vd", MODE_PRIVATE).getInt("activeLayer", 0).coerceIn(0, cv.doc.layers.lastIndex)
             toast("Restored your last drawing")
         } catch (e: Throwable) { f.delete() }
     }
 
     private fun newDrawing() {
-        if (cv.doc.objs.isEmpty()) { cv.newDoc(Doc()); return }
-        AlertDialog.Builder(this).setTitle("New drawing?").setMessage("The current drawing will be replaced. Save it first if you need it.")
+        if (cv.pages.size == 1 && cv.doc.objs.isEmpty()) { cv.newDoc(Doc()); return }
+        AlertDialog.Builder(this, R.style.AppDialog).setTitle("New drawing?").setMessage("The current drawing will be replaced. Save it first if you need it.")
             .setPositiveButton("New") { _, _ -> cv.newDoc(Doc()) }.setNegativeButton("Cancel", null).show()
     }
 
@@ -308,7 +312,7 @@ class MainActivity : AppCompatActivity() {
             .putInt("palMode", palMode).putString("tool", cv.tool.name)
             .putInt("bg", cv.bgColor).putInt("gridc", cv.gridColor).putInt("gridA", cv.gridAlpha).putInt("guidec", cv.guideColor).putInt("selc", cv.selColor)
             .putFloat("snapR", cv.snapRadius).putBoolean("snapN", cv.snapNodes).putBoolean("snapC", cv.snapCenters).putBoolean("snapE", cv.snapEdges)
-            .putBoolean("pressure", cv.pressureStroke).putInt("lassoMode", cv.lassoMode).putBoolean("rulers", cv.showRulers).putBoolean("tapG", cv.tapGestures).putFloat("hScale", cv.handleScale).putFloat("fhEps", cv.freehandEps).putInt("undoN", cv.undoLimit).putFloat("pAlpha", panelAlpha).putInt("iconDp", iconDp)
+            .putBoolean("fullMode", fullMode).putBoolean("leftH", leftHanded).putBoolean("pressure", cv.pressureStroke).putInt("lassoMode", cv.lassoMode).putBoolean("rulers", cv.showRulers).putBoolean("tapG", cv.tapGestures).putFloat("hScale", cv.handleScale).putFloat("fhEps", cv.freehandEps).putInt("undoN", cv.undoLimit).putFloat("pAlpha", panelAlpha).putInt("iconDp", iconDp)
             .putString("st_fill", colStr(st.fill)).putString("st_fill2", colStr(st.fill2)).putString("st_stroke", colStr(st.stroke))
             .putFloat("st_sw", st.strokeW).putInt("st_cap", st.cap).putInt("st_join", st.join).putInt("st_dash", st.dash)
             .putBoolean("st_arrow", st.arrow).putFloat("st_alpha", st.alpha).putBoolean("st_shadow", st.shadow)
@@ -334,7 +338,7 @@ class MainActivity : AppCompatActivity() {
         cv.guideColor = sp.getInt("guidec", cv.guideColor); cv.selColor = sp.getInt("selc", cv.selColor)
         cv.snapRadius = sp.getFloat("snapR", cv.snapRadius).coerceIn(4f, 30f); cv.snapNodes = sp.getBoolean("snapN", true)
         cv.snapCenters = sp.getBoolean("snapC", false); cv.snapEdges = sp.getBoolean("snapE", false)
-        cv.pressureStroke = sp.getBoolean("pressure", true); cv.lassoMode = sp.getInt("lassoMode", 2).coerceIn(0, 2); cv.showRulers = sp.getBoolean("rulers", true); cv.tapGestures = sp.getBoolean("tapG", true); cv.handleScale = sp.getFloat("hScale", 1f).coerceIn(0.6f, 2f); cv.freehandEps = sp.getFloat("fhEps", cv.freehandEps).coerceIn(1f, 10f); cv.undoLimit = sp.getInt("undoN", cv.undoLimit).coerceIn(10, 200)
+        fullMode = sp.getBoolean("fullMode", false); leftHanded = sp.getBoolean("leftH", false); cv.pressureStroke = sp.getBoolean("pressure", true); cv.lassoMode = sp.getInt("lassoMode", 2).coerceIn(0, 2); cv.showRulers = sp.getBoolean("rulers", true); cv.tapGestures = sp.getBoolean("tapG", true); cv.handleScale = sp.getFloat("hScale", 1f).coerceIn(0.6f, 2f); cv.freehandEps = sp.getFloat("fhEps", cv.freehandEps).coerceIn(1f, 10f); cv.undoLimit = sp.getInt("undoN", cv.undoLimit).coerceIn(10, 200)
         panelAlpha = sp.getFloat("pAlpha", panelAlpha).coerceIn(0.3f, 1f); iconDp = sp.getInt("iconDp", iconDp).coerceIn(24, 44)
         cv.applyTheme()
         st.fill = col("st_fill", st.fill); st.fill2 = col("st_fill2", null); st.stroke = col("st_stroke", st.stroke)
@@ -393,7 +397,7 @@ class MainActivity : AppCompatActivity() {
                 for ((n, p) in panels) { p.x = sp.getFloat("p_${n}_x", 0f) * w; p.y = sp.getFloat("p_${n}_y", 0f) * h }
                 resolveAll()
                 for ((n, p) in panels) if (n != "Quick" && !sp.getBoolean("p_${n}_vis", true)) collapse(p)
-                reflow(); cv.postDelayed({ cv.fit() }, 80)
+                reflow(); if (fullMode) applyLayoutMode(); cv.postDelayed({ cv.fit() }, 80)
             }, 100)
             return
         }
@@ -411,7 +415,7 @@ class MainActivity : AppCompatActivity() {
             panels["Palette"]?.let { it.x = (w - it.width).toFloat(); it.y = (top + gap).toFloat() }
             panels["Quick"]?.let { it.x = (w - it.width - dp(70)).toFloat(); it.y = (top + gap).toFloat() }
             panels["Objects"]?.let { it.x = (w - it.width - dp(70)).toFloat(); it.y = (top + gap + dp(50)).toFloat() }
-            resolveAll(); if (hideObjects) panels["Objects"]?.let { collapse(it) }; reflow(); cv.postDelayed({ cv.fit() }, 80)
+            resolveAll(); if (hideObjects) panels["Objects"]?.let { collapse(it) }; reflow(); if (fullMode) applyLayoutMode(); cv.postDelayed({ cv.fit() }, 80)
         }, 100)
     }
 
@@ -600,7 +604,7 @@ class MainActivity : AppCompatActivity() {
     private fun quickFlyout(dismiss: () -> Unit): View {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(6), dp(6), dp(6)) }
         val items = listOf<Pair<String, () -> Unit>>("☰  Menu" to { mainMenu() }, "↶  Undo" to { cv.undo() }, "↷  Redo" to { cv.redo() },
-            "✓  Finish path" to { cv.finishPen() }, "⛶  Fit page" to { cv.fit() }, "◩  Collapse / show panels" to { togglePanels() }, "▤  Tidy collapsed titles" to { tidyCollapsed() })
+            "✓  Finish path" to { cv.finishPen() }, "⛶  Fit page" to { cv.fit() }, "◩  Collapse / show panels" to { togglePanels() }, "▤  Tidy collapsed titles" to { tidyCollapsed() }, "▦  Pages…" to { pagesMenu() })
         for ((t, a) in items) col.addView(chip(t) { dismiss(); a() })
         return col
     }
@@ -703,6 +707,9 @@ class MainActivity : AppCompatActivity() {
         check("To object centres", { cv.snapCenters }, { cv.snapCenters = it })
         check("To object edges & corners", { cv.snapEdges }, { cv.snapEdges = it })
         col.addView(TextView(this).apply { text = "Object snapping is switched on with “Objects” in the status bar."; textSize = 11f })
+        head("Layout")
+        check("Full canvas layout (small buttons + popup menus)", { fullMode }, { setLayout(it) })
+        check("Left-handed (mirror the buttons)", { leftHanded }, { leftHanded = it; if (fullMode) applyLayoutMode() })
         head("View & gestures")
         check("Show rulers (drag from a ruler to make a guide)", { cv.showRulers }, { cv.showRulers = it })
         check("Two-finger tap = undo, three-finger tap = redo", { cv.tapGestures }, { cv.tapGestures = it })
@@ -712,7 +719,7 @@ class MainActivity : AppCompatActivity() {
         slider("Undo steps", 10, 200, { cv.undoLimit }, { cv.undoLimit = it }, "")
         lateinit var dlg: AlertDialog
         col.addView(Button(this).apply { text = "Reset to defaults"; setOnClickListener { resetSettings(); dlg.dismiss(); settingsDialog() } })
-        dlg = AlertDialog.Builder(this).setTitle("Settings").setView(ScrollView(this).apply { addView(col) }).setPositiveButton("Done", null)
+        dlg = AlertDialog.Builder(this, R.style.AppDialog).setTitle("Settings").setView(ScrollView(this).apply { addView(col) }).setPositiveButton("Done", null)
             .setOnDismissListener { saveUi() }.create()
         dlg.show()
     }
@@ -742,13 +749,13 @@ class MainActivity : AppCompatActivity() {
     private fun f(s: CharSequence, d: Float) = s.toString().toFloatOrNull() ?: d
 
     private fun menu(title: String, items: List<Pair<String, () -> Unit>>) {
-        AlertDialog.Builder(this).setTitle(title).setItems(items.map { it.first }.toTypedArray()) { _, i -> items[i].second() }.show()
+        treeOpen(title, items.map { (t, a) -> MNode(t, action = a) })
     }
 
     private fun numDialog(title: String, labels: List<String>, defaults: List<Float>, ok: (List<Float>) -> Unit) {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0) }
         val fs = labels.mapIndexed { i, l -> col.addView(TextView(this).apply { text = l }); field(200).also { it.setText(fmt(defaults[i]).trimEnd('0').trimEnd('.')); col.addView(it) } }
-        AlertDialog.Builder(this).setTitle(title).setView(col).setPositiveButton("OK") { _, _ -> ok(fs.mapIndexed { i, e -> f(e.text, defaults[i]) }) }.setNegativeButton("Cancel", null).show()
+        AlertDialog.Builder(this, R.style.AppDialog).setTitle(title).setView(col).setPositiveButton("OK") { _, _ -> ok(fs.mapIndexed { i, e -> f(e.text, defaults[i]) }) }.setNegativeButton("Cancel", null).show()
     }
 
     // ---------- Toolbox ----------
@@ -785,7 +792,7 @@ class MainActivity : AppCompatActivity() {
         when (t) {
             Tool.POLYGON -> numDialog("Polygon", listOf("Sides (3-30)"), listOf(cv.polySides.toFloat())) { cv.polySides = it[0].toInt().coerceIn(3, 30) }
             Tool.STAR -> numDialog("Star", listOf("Points (3-30)"), listOf(cv.starPts.toFloat())) { cv.starPts = it[0].toInt().coerceIn(3, 30) }
-            Tool.BASIC -> AlertDialog.Builder(this).setTitle("Basic shape").setItems(Geo.BASIC.toTypedArray()) { _, i -> cv.basicIdx = i; cv.tool = Tool.BASIC }.show()
+            Tool.BASIC -> AlertDialog.Builder(this, R.style.AppDialog).setTitle("Basic shape").setItems(Geo.BASIC.toTypedArray()) { _, i -> cv.basicIdx = i; cv.tool = Tool.BASIC }.show()
             Tool.NODE -> menu("Node operations", listOf(
                 "Add node" to { cv.nodeAdd() }, "Delete node" to { cv.nodeDelete() }, "Break at node" to { cv.nodeBreak() }, "Join / close path" to { cv.nodeJoin() },
                 "Convert to curve" to { cv.nodeToCurve() }, "Convert to line" to { cv.nodeToLine() }, "Make smooth" to { cv.nodeSmooth() }, "Make cusp" to { cv.nodeCusp() }))
@@ -860,11 +867,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---------- Colour picker (RGB / CMYK / HSV) & palette ----------
+    private fun saveCustomColour(c: Int) {
+        val sp = getSharedPreferences("vd", MODE_PRIVATE)
+        sp.edit().putString("custom", (sp.getString("custom", "")!!.split(",").filter { it.isNotEmpty() } + c.toString()).joinToString(",")).apply()
+    }
+
+    /** Colour dialog: colour wheel + brightness, hex field and RGB / CMYK / HSV sliders. "+ My colours" keeps the colour in the Custom palette. */
     private fun pickColor(init: Int, cb: (Int) -> Unit) {
         var mode = 0; var cur = init or (0xFF shl 24); var updating = false
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(8), dp(18), 0) }
-        val prev = View(this); col.addView(prev, LinearLayout.LayoutParams(-1, dp(40)))
-        val hexTv = TextView(this).apply { gravity = Gravity.CENTER }; col.addView(hexTv)
+        val prev = View(this); col.addView(prev, LinearLayout.LayoutParams(-1, dp(34)))
+        val wheel = ColorWheelView(this); col.addView(wheel, LinearLayout.LayoutParams(dp(190), dp(190)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(6) })
+        val vsb = SeekBar(this).apply { max = 100; progress = 100 }
+        col.addView(label("Brightness")); col.addView(vsb)
+        val hexEt = EditText(this).apply { setSingleLine(); setTextColor(Color.WHITE); textSize = 13f; gravity = Gravity.CENTER; imeOptions = EditorInfo.IME_ACTION_DONE; hint = "#RRGGBB" }
+        col.addView(hexEt)
         val bars = List(4) { SeekBar(this) }; val names = List(4) { label("") }
         bars.forEachIndexed { i, b -> col.addView(names[i]); col.addView(b) }
         fun comps(): FloatArray = when (mode) {
@@ -873,24 +890,38 @@ class MainActivity : AppCompatActivity() {
                 if (k >= 1f) floatArrayOf(0f, 0f, 0f, 100f) else floatArrayOf((1 - r - k) / (1 - k) * 100, (1 - g - k) / (1 - k) * 100, (1 - b - k) / (1 - k) * 100, k * 100) }
             else -> { val h = FloatArray(3); Color.colorToHSV(cur, h); floatArrayOf(h[0] / 3.6f, h[1] * 100, h[2] * 100) }
         }
-        fun show() {
+        fun show(fromWheel: Boolean = false) {
             updating = true; val c = comps(); val n = if (mode == 1) 4 else 3
             val nm = arrayOf(arrayOf("R", "G", "B", ""), arrayOf("C", "M", "Y", "K"), arrayOf("H", "S", "V", ""))[mode]
             bars.forEachIndexed { i, b -> b.visibility = if (i < n) View.VISIBLE else View.GONE; names[i].visibility = b.visibility; names[i].text = nm[i]; if (i < n) b.progress = c[i].roundToInt() }
-            prev.setBackgroundColor(cur); hexTv.text = String.format("#%06X", cur and 0xFFFFFF); updating = false
+            prev.setBackgroundColor(cur)
+            if (!fromWheel) wheel.setColor(cur)
+            vsb.progress = (wheel.value * 100).toInt()
+            hexEt.setText(String.format("#%06X", cur and 0xFFFFFF)); updating = false
         }
+        wheel.onChange = { c -> if (!updating) { cur = c or (0xFF shl 24); show(true) } }
+        vsb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, p: Int, u: Boolean) { if (u) wheel.setValue(p / 100f) }
+            override fun onStartTrackingTouch(s: SeekBar) {}; override fun onStopTrackingTouch(s: SeekBar) {}
+        })
         bars.forEach { b -> b.max = 100; b.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar, p: Int, u: Boolean) {
                 if (updating || !u) return; val v = bars.map { it.progress / 100f }
                 cur = when (mode) { 0 -> Color.rgb((v[0] * 255).toInt(), (v[1] * 255).toInt(), (v[2] * 255).toInt())
                     1 -> Color.rgb(((1 - v[0]) * (1 - v[3]) * 255).toInt(), ((1 - v[1]) * (1 - v[3]) * 255).toInt(), ((1 - v[2]) * (1 - v[3]) * 255).toInt())
                     else -> Color.HSVToColor(floatArrayOf(v[0] * 360, v[1], v[2])) }
-                prev.setBackgroundColor(cur); hexTv.text = String.format("#%06X", cur and 0xFFFFFF)
+                prev.setBackgroundColor(cur); updating = true; wheel.setColor(cur); vsb.progress = (wheel.value * 100).toInt()
+                hexEt.setText(String.format("#%06X", cur and 0xFFFFFF)); updating = false
             }
             override fun onStartTrackingTouch(s: SeekBar) {}; override fun onStopTrackingTouch(s: SeekBar) {} }) }
-        val modeBtn = Button(this).apply { text = "Model: RGB"; setOnClickListener { mode = (mode + 1) % 3; text = "Model: " + arrayOf("RGB", "CMYK", "HSV")[mode]; show() } }
+        hexEt.setOnEditorActionListener { _, _, _ ->
+            try { cur = Color.parseColor(hexEt.text.toString().trim()) or (0xFF shl 24); show(false) } catch (e: Exception) { toast("Use #RRGGBB") }
+            true
+        }
+        val modeBtn = Button(this).apply { text = "Sliders: RGB"; setOnClickListener { mode = (mode + 1) % 3; text = "Sliders: " + arrayOf("RGB", "CMYK", "HSV")[mode]; show() } }
         col.addView(modeBtn); show()
-        AlertDialog.Builder(this).setTitle("Colour").setView(ScrollView(this).apply { addView(col) }).setPositiveButton("OK") { _, _ -> cb(cur) }.setNegativeButton("Cancel", null).show()
+        AlertDialog.Builder(this, R.style.AppDialog).setTitle("Colour").setView(ScrollView(this).apply { addView(col) })
+            .setPositiveButton("OK") { _, _ -> cb(cur) }.setNeutralButton("＋ My colours") { _, _ -> saveCustomColour(cur); cb(cur) }.setNegativeButton("Cancel", null).show()
     }
 
     private fun cmyk(c: Float, m: Float, y: Float, k: Float) = Color.rgb(((1 - c) * (1 - k) * 255).toInt(), ((1 - m) * (1 - k) * 255).toInt(), ((1 - y) * (1 - k) * 255).toInt())
@@ -966,6 +997,9 @@ class MainActivity : AppCompatActivity() {
     private fun quickBar(): View {
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(2), dp(4), dp(2)) }
         listOf("☰" to { mainMenu() }, "↶" to { cv.undo() }, "↷" to { cv.redo() }, "✓" to { cv.finishPen() }, "⛶" to { cv.fit() }, "◩" to { togglePanels() }).forEach { (t, a) -> row.addView(chip(t, a)) }
+        val pageChip = chip("1/1") { pagesMenu() }
+        row.addView(chip("◀") { cv.setPage(cv.pageIdx - 1) }); row.addView(pageChip); row.addView(chip("▶") { cv.setPage(cv.pageIdx + 1) })
+        refreshers.add { pageChip.text = "${cv.pageIdx + 1}/${cv.pages.size}" }
         return row
     }
 
@@ -977,21 +1011,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun panelMenu() {
         val names = panels.keys.filter { it != "Quick" }.toTypedArray(); val checked = BooleanArray(names.size) { !panels[names[it]]!!.collapsed }
-        AlertDialog.Builder(this).setTitle("Show / collapse panels").setMultiChoiceItems(names, checked) { _, i, on -> panels[names[i]]!!.let { if (on) expand(it) else collapse(it) } }
+        AlertDialog.Builder(this, R.style.AppDialog).setTitle("Show / collapse panels").setMultiChoiceItems(names, checked) { _, i, on -> panels[names[i]]!!.let { if (on) expand(it) else collapse(it) } }
             .setNeutralButton("Tidy titles") { _, _ -> tidyCollapsed() }.setPositiveButton("Done", null).setOnDismissListener { root.postDelayed({ resolveAll(); reflow() }, 150) }.show()
     }
 
     // ---------- Menus ----------
     private fun mainMenu() = menu("VecDraw by Topz", listOf(
         "File" to { fileMenu() }, "Edit" to { editMenu() }, "Arrange / Transform" to { arrangeMenu() },
-        "Effects" to { effectsMenu() }, "View" to { viewMenu() }, "Page & Grid" to { pageMenu() }, "Panels" to { panelMenu() }, "Settings…" to { settingsDialog() }, "Reset panel layout" to { layoutPanels(true) }))
+        "Effects" to { effectsMenu() }, "View" to { viewMenu() }, "Pages…" to { pagesMenu() }, "Page & Grid" to { pageMenu() }, "Panels" to { panelMenu() }, "Settings…" to { settingsDialog() }, "Reset panel layout" to { layoutPanels(true) }, "Layout (classic / full canvas)…" to { layoutMenu() }))
 
     private fun fileMenu() = menu("File", listOf(
         "New" to { newDrawing() },
         "Open project (.vdt)…" to { openProject.launch(arrayOf("*/*")) },
-        "Save project (.vdt)…" to { write("drawing.vdt", "application/json") { it.write(cv.doc.toJson().toString().toByteArray()) } },
-        "Export SVG (vector)…" to { write("drawing.svg", "image/svg+xml") { it.write(Export.svg(cv.doc).toByteArray()) } },
-        "Export PDF (vector)…" to { write("drawing.pdf", "application/pdf") { Export.pdf(cv.doc, it) } },
+        "Save project (.vdt)…" to { write("drawing.vdt", "application/json") { it.write(cv.projectJson().toString().toByteArray()) } },
+        "Export SVG (this page)…" to { write("drawing.svg", "image/svg+xml") { it.write(Export.svg(cv.doc).toByteArray()) } },
+        "Export PDF (all pages)…" to { write("drawing.pdf", "application/pdf") { Export.pdfPages(cv.pages, it) } },
+        "Export PDF (this page only)…" to { write("page.pdf", "application/pdf") { Export.pdf(cv.doc, it) } },
+        "Export all pages as ZIP of SVG…" to { write("pages.zip", "application/zip") { Export.zipSvg(cv.pages, it) } },
+        "Export all pages as ZIP of PNG…" to { dpiZipMenu() },
         "Export PNG…" to { dpiMenu(false) }, "Export JPEG…" to { dpiMenu(true) },
         "Import image (reference trace)…" to { openImage.launch(arrayOf("image/*")) },
         "Import SVG…" to { openSvg.launch(arrayOf("*/*")) },
@@ -1057,7 +1094,7 @@ class MainActivity : AppCompatActivity() {
         val fontSp = Spinner(this).apply { adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, fontNames); setSelection(max(0, fontNames.indexOf(o.font.ifEmpty { "sans" }))) }
         col.addView(label("Font")); col.addView(fontSp)
         val rotF = field(200).also { it.setText(fmt(o.tRot)); col.addView(label("Rotation (°)")); col.addView(it) }
-        AlertDialog.Builder(this).setTitle(if (isNew) "New text" else "Edit text").setView(ScrollView(this).apply { addView(col) })
+        AlertDialog.Builder(this, R.style.AppDialog).setTitle(if (isNew) "New text" else "Edit text").setView(ScrollView(this).apply { addView(col) })
             .setPositiveButton("OK") { _, _ ->
                 if (!isNew) cv.checkpoint()
                 o.text = et.text.toString(); o.size = f(sz.text, 12f).coerceAtLeast(1f) * 25.4f / 72f; o.spacing = f(kern.text, 0f); o.leading = f(lead.text, 1.2f)
@@ -1065,6 +1102,270 @@ class MainActivity : AppCompatActivity() {
                 o.font = fontNames[fontSp.selectedItemPosition.coerceIn(0, fontNames.lastIndex)]; o.tRot = f(rotF.text, 0f)
                 cv.commitText(o, isNew)
             }.setNegativeButton("Cancel", null).show()
+    }
+
+    // ---------- themed popup tree + full-canvas layout ----------
+    private var tree: TreePopup? = null
+    private fun treePopup(): TreePopup = tree ?: TreePopup(this, root).also { tree = it }
+    private fun treeOpen(title: String, nodes: List<MNode>) = treePopup().open(title, nodes)
+    private fun treeOpenView(title: String, build: (() -> Unit) -> View, onClose: (() -> Unit)? = null) = treePopup().openView(title, build, onClose)
+
+    private var fullMode = false; private var leftHanded = false
+    private val fullViews = ArrayList<View>()
+    private var fullStatus: TextView? = null; private var ctxBar: LinearLayout? = null; private var hotbar: LinearLayout? = null
+    private var chipFill: View? = null; private var chipLine: View? = null; private var ctxFill: View? = null; private var ctxLine: View? = null; private var ctxW: TextView? = null
+    private val recentTools = arrayListOf(Tool.PICK, Tool.PEN, Tool.RECT)
+    private val fadeHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private fun hasOptions(t: Tool) = t == Tool.POLYGON || t == Tool.STAR || t == Tool.BASIC || t == Tool.NODE || t == Tool.PEN || t == Tool.BEZIER ||
+        t == Tool.POLYLINE || t == Tool.BSPLINE || t == Tool.LASSO || t == Tool.TRANS || t == Tool.MESH
+
+    private fun toolNodes(): List<MNode> = Tool.values().map { t ->
+        MNode(t.label, icon = t.icon, selected = cv.tool == t, action = { cv.tool = t }, more = if (hasOptions(t)) ({ toolOptions(t) }) else null)
+    }
+
+    private fun lentView(name: String): View {
+        val d = panels[name]; val c = d?.lendContent()
+        return if (c != null) FrameLayout(this).apply { addView(c, FrameLayout.LayoutParams(-2, -2)) } else TextView(this).apply { text = "Already open"; setTextColor(Color.WHITE); setPadding(dp(14), dp(10), dp(14), dp(10)) }
+    }
+
+    private fun setCap(n: Int) { cv.style.cap = n; cv.editSel { it.cap = n } }
+    private fun setJoin(n: Int) { cv.style.join = n; cv.editSel { it.join = n } }
+    private fun setDash(n: Int) { cv.style.dash = n; cv.editSel { it.dash = n } }
+
+    private fun widthView(): View {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), dp(10), dp(14), dp(10)) }
+        val tv = TextView(this).apply { setTextColor(Color.WHITE); text = "Outline width: ${fmt(obj().strokeW)} mm" }
+        val sb = SeekBar(this).apply {
+            max = 200; progress = (obj().strokeW / 0.05f).toInt().coerceIn(0, 200)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar, p: Int, u: Boolean) { if (u) { val w = p * 0.05f; cv.style.strokeW = w; cv.editSel(false) { it.strokeW = w }; tv.text = "Outline width: ${fmt(w)} mm" } }
+                override fun onStartTrackingTouch(s: SeekBar) { if (cv.sel.isNotEmpty()) cv.checkpoint() }
+                override fun onStopTrackingTouch(s: SeekBar) {}
+            })
+        }
+        box.addView(tv); box.addView(sb); return box
+    }
+
+    private fun gradientMenu() {
+        menu("Gradient", listOf("Uniform fill" to { cv.setFill2(null) },
+            "Gradient end colour…" to { pickColor(obj().fill2 ?: Color.WHITE) { c -> cv.setFill2(c) } },
+            "Linear ⇄ radial" to { cv.editSel { o -> if (o.fill2 == null) o.fill2 = Color.WHITE; o.gradType = if (o.gradType == 0) 1 else 0 } },
+            "Middle colour…" to { pickColor(obj().fillMid ?: Color.GRAY) { c -> cv.editSel { o -> if (o.fill2 == null) o.fill2 = Color.WHITE; o.fillMid = c } } },
+            "Remove middle colour" to { cv.editSel { it.fillMid = null } },
+            "Gradient angle…" to { numDialog("Angle (deg)", listOf("Angle"), listOf(obj().gradAngle)) { v -> cv.editSel { o -> if (o.fill2 == null) o.fill2 = Color.WHITE; o.gradAngle = v[0] } } }))
+    }
+
+    private fun boundsDialog() {
+        val b = cv.selBounds() ?: run { toast("Select something first"); return }
+        val u = uf()
+        numDialog("Size & position (${cv.doc.unit})", listOf("X", "Y", "Width", "Height"), listOf(b.left / u, b.top / u, b.width() / u, b.height() / u)) { cv.setBounds(it[0] * u, it[1] * u, it[2] * u, it[3] * u) }
+    }
+
+    private fun propNodes(): List<MNode> {
+        fun leaf(t: String, g: String? = null, a: () -> Unit) = MNode(t, glyph = g, action = a)
+        return listOf(
+            leaf("Fill colour…", "■") { pickColor(obj().fill ?: Color.WHITE) { cv.setFill(it) } },
+            leaf("No fill", "∅") { cv.setFill(null) },
+            leaf("Outline colour…", "□") { pickColor(obj().stroke ?: Color.BLACK) { cv.setStroke(it) } },
+            leaf("No outline", "∅") { cv.setStroke(null) },
+            MNode("Outline width", glyph = "━", custom = { widthView() }),
+            MNode("Outline style", glyph = "┄", children = { listOf(
+                leaf("Cap: round") { setCap(0) }, leaf("Cap: square") { setCap(1) }, leaf("Cap: butt") { setCap(2) },
+                leaf("Join: round") { setJoin(0) }, leaf("Join: bevel") { setJoin(1) }, leaf("Join: sharp") { setJoin(2) },
+                leaf("Solid line") { setDash(0) }, leaf("Dashed") { setDash(1) }, leaf("Dotted") { setDash(2) }, leaf("Dash-dot") { setDash(3) },
+                leaf("Arrowhead on / off") { val n = !obj().arrow; cv.style.arrow = n; cv.editSel { it.arrow = n } }) }),
+            MNode("Effects", glyph = "✦", children = { listOf(
+                leaf("Drop shadow on / off") { val n = !obj().shadow; cv.style.shadow = n; cv.editSel { it.shadow = n } },
+                leaf("Gradient…") { gradientMenu() }, leaf("Transparency…") { transMenu() }) }),
+            leaf("Size & position…", "⤢") { boundsDialog() },
+            MNode("All controls (sliders, fields)", glyph = "☰", custom = { lentView("Properties") }, onClose = { panels["Properties"]?.returnContent() }))
+    }
+
+    private fun rootNodes(): List<MNode> = listOf(
+        MNode("Tools", glyph = "✎", children = { toolNodes() }),
+        MNode("Colour", glyph = "◐", custom = { colourView(false) }),
+        MNode("Properties", glyph = "☰", children = { propNodes() }),
+        MNode("Layers & objects", glyph = "▤", custom = { lentView("Objects") }, onClose = { panels["Objects"]?.returnContent() }),
+        MNode("Pages", glyph = "▦", action = { pagesMenu() }),
+        MNode("Edit", glyph = "✂", action = { editMenu() }),
+        MNode("Arrange", glyph = "⇄", action = { arrangeMenu() }),
+        MNode("Effects", glyph = "✦", action = { effectsMenu() }),
+        MNode("View", glyph = "◉", action = { viewMenu() }),
+        MNode("File", glyph = "▣", action = { fileMenu() }),
+        MNode("Settings", glyph = "⚙", action = { settingsDialog() }),
+        MNode("Layout", glyph = "▭", action = { layoutMenu() }))
+
+    /** Inline colour panel: Fill / Outline target, colour wheel + brightness (live), palette tabs, save to My colours. */
+    private fun colourView(startOutline: Boolean): View {
+        var toOutline = startOutline
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), dp(4), dp(8), dp(8)) }
+        val wheel = ColorWheelView(this)
+        fun target(): Int = (if (toOutline) obj().stroke else obj().fill) ?: Color.WHITE
+        fun applyCol(c: Int) { if (toOutline) cv.setStroke(c) else cv.setFill(c) }
+        wheel.setColor(target()); wheel.onChange = { c -> applyCol(c) }
+        val vsb = SeekBar(this).apply { max = 100; progress = (wheel.value * 100).toInt() }
+        vsb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, p: Int, u: Boolean) { if (u) wheel.setValue(p / 100f) }
+            override fun onStartTrackingTouch(s: SeekBar) { if (cv.sel.isNotEmpty()) cv.checkpoint() }
+            override fun onStopTrackingTouch(s: SeekBar) {}
+        })
+        val seg = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val fillC = chip("Fill") {}; val lineC = chip("Outline") {}
+        fun mark() { fillC.setTextColor(if (!toOutline) GOLD else Color.WHITE); lineC.setTextColor(if (toOutline) GOLD else Color.WHITE) }
+        fun retarget() { wheel.setColor(target()); vsb.progress = (wheel.value * 100).toInt(); mark() }
+        fillC.setOnClickListener { toOutline = false; retarget() }; lineC.setOnClickListener { toOutline = true; retarget() }
+        mark(); seg.addView(fillC); seg.addView(lineC)
+        seg.addView(chip("∅ none") { if (toOutline) cv.setStroke(null) else cv.setFill(null) })
+        seg.addView(chip("＋ Save") { saveCustomColour(target()); toast("Saved to My colours") })
+        box.addView(seg)
+        box.addView(wheel, LinearLayout.LayoutParams(dp(210), dp(210)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(6) })
+        box.addView(label("Brightness")); box.addView(vsb)
+        val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val grid = GridLayout(this).apply { columnCount = 6 }
+        fun fill(mode: Int) {
+            grid.removeAllViews()
+            for (c in paletteColors(mode)) {
+                val sw = View(this); setSwatch(sw, c)
+                sw.layoutParams = GridLayout.LayoutParams().apply { width = dp(36); height = dp(36); setMargins(dp(3), dp(3), dp(3), dp(3)) }
+                sw.setOnClickListener { applyCol(c); wheel.setColor(c); vsb.progress = (wheel.value * 100).toInt() }
+                grid.addView(sw)
+            }
+        }
+        listOf("RGB", "CMYK", "HSV", "Custom").forEachIndexed { i, n -> tabs.addView(chip(n) { fill(i) }) }
+        fill(palMode.coerceIn(0, 3))
+        box.addView(tabs); box.addView(grid)
+        box.addView(chip("Sliders, hex, CMYK…") { treePopup().dismiss(); pickColor(target()) { applyCol(it) } })
+        return box
+    }
+
+    private fun openColourPopup(outline: Boolean) = treeOpenView("Colour", { _ -> colourView(outline) })
+
+    private fun layoutMenu() {
+        menu("Layout", listOf(
+            "Classic panels (default)" to { setLayout(false) },
+            "Full canvas (small buttons + popup menus)" to { setLayout(true) },
+            (if (leftHanded) "Left-handed: on  (tap to turn off)" else "Left-handed: off  (tap to turn on)") to { leftHanded = !leftHanded; if (fullMode) applyLayoutMode(); saveUi() }))
+    }
+
+    private fun setLayout(full: Boolean) { fullMode = full; applyLayoutMode(); saveUi() }
+
+    private fun applyLayoutMode() {
+        tree?.dismiss()
+        fullViews.forEach { root.removeView(it) }; fullViews.clear()
+        fullStatus = null; ctxBar = null; hotbar = null; chipFill = null; chipLine = null; ctxFill = null; ctxLine = null; ctxW = null
+        if (fullMode) {
+            panels.values.forEach { it.visibility = View.GONE }
+            cv.rulersSuppressed = true
+            buildFullUi(); updateFullUi()
+            root.post { reflow(); cv.postDelayed({ cv.fit() }, 80) }
+        } else {
+            cv.rulersSuppressed = false
+            panels.values.forEach { it.visibility = View.VISIBLE }
+            root.post { resolveAll(); reflow(); cv.postDelayed({ cv.fit() }, 80) }
+        }
+    }
+
+    private fun fab(glyph: String, onClick: () -> Unit): TextView = TextView(this).apply {
+        text = glyph; setTextColor(Color.WHITE); textSize = 17f; gravity = Gravity.CENTER
+        background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xD91F2329.toInt()); setStroke(dp(1), 0x99E5A93C.toInt()) }
+        setOnClickListener { onClick() }
+    }
+
+    private fun addFull(v: View, g: Int, w: Int, h: Int, ml: Int = 0, mt: Int = 0, mr: Int = 0, mb: Int = 0) {
+        root.addView(v, FrameLayout.LayoutParams(w, h, g).apply { setMargins(ml, mt, mr, mb) }); fullViews.add(v)
+    }
+
+    private fun hotButton(t: Tool): View {
+        val on = cv.tool == t; val sz = dp(40)
+        return FrameLayout(this).apply {
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(if (on) GOLD else 0xD91F2329.toInt()); setStroke(dp(1), 0x99E5A93C.toInt()) }
+            addView(IconView(context, t.icon).also { it.isSelected = on }, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+            layoutParams = LinearLayout.LayoutParams(sz, sz).apply { setMargins(dp(2), 0, dp(2), 0) }
+            setOnClickListener { cv.tool = t }
+        }
+    }
+
+    private fun buildFullUi() {
+        val a = if (leftHanded) Gravity.RIGHT else Gravity.LEFT; val b = if (leftHanded) Gravity.LEFT else Gravity.RIGHT
+        val s = dp(44); val m = dp(8); val gap = dp(6); val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
+        // main button + hotbar of the last tools used
+        addFull(fab("☰") { treeOpen("VecDraw", rootNodes()) }, Gravity.TOP or a, s, s, m, m, m, m)
+        val hb = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }; hotbar = hb
+        val off = m + s + gap
+        addFull(hb, Gravity.TOP or a, wrap, s, if (leftHanded) m else off, m, if (leftHanded) off else m, m)
+        // undo / redo / settings
+        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for ((g, act) in listOf<Pair<String, () -> Unit>>("↶" to { cv.undo() }, "↷" to { cv.redo() }, "⚙" to { settingsDialog() }))
+            top.addView(fab(g, act), LinearLayout.LayoutParams(s, s).apply { setMargins(dp(3), 0, dp(3), 0) })
+        addFull(top, Gravity.TOP or b, wrap, wrap, m, m, m, m)
+        // zoom / fit
+        val zoom = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for ((g, act) in listOf<Pair<String, () -> Unit>>("−" to { cv.zoomBy(0.8f) }, "⛶" to { cv.fit() }, "＋" to { cv.zoomBy(1.25f) }, "▾" to { viewMenu() }))
+            zoom.addView(fab(g, act), LinearLayout.LayoutParams(s, s).apply { setMargins(dp(3), 0, dp(3), 0) })
+        addFull(zoom, Gravity.BOTTOM or b, wrap, wrap, m, m, m, m)
+        // current fill / outline (tap = colour popup)
+        val cc = FrameLayout(this).apply {
+            setOnClickListener { openColourPopup(false) }
+            val line = View(context); val fill = View(context); chipLine = line; chipFill = fill
+            addView(line, FrameLayout.LayoutParams(dp(30), dp(30)).apply { leftMargin = dp(18); topMargin = dp(18) })
+            addView(fill, FrameLayout.LayoutParams(dp(30), dp(30)).apply { leftMargin = 0; topMargin = 0 })
+        }
+        addFull(cc, Gravity.BOTTOM or a, dp(54), dp(54), m, m, m, m)
+        // status
+        val st = TextView(this).apply { setTextColor(0xAAFFFFFF.toInt()); textSize = 10f }; fullStatus = st
+        addFull(st, Gravity.TOP or Gravity.CENTER_HORIZONTAL, wrap, wrap, 0, m + dp(4), 0, 0)
+        // contextual bar (only while something is selected)
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(8), dp(4), dp(8), dp(4)); visibility = View.GONE
+            background = GradientDrawable().apply { setColor(0xE61F2329.toInt()); cornerRadius = dp(24).toFloat(); setStroke(dp(1), 0x99E5A93C.toInt()) }
+        }
+        val f = swatch { openColourPopup(false) }; val l = swatch { openColourPopup(true) }; ctxFill = f; ctxLine = l
+        val w = TextView(this).apply { setTextColor(Color.WHITE); textSize = 12f; minWidth = dp(46); gravity = Gravity.CENTER }; ctxW = w
+        bar.addView(f); bar.addView(l)
+        bar.addView(chip("−") { cv.setStrokeW(max(0f, obj().strokeW - 0.1f)) }); bar.addView(w); bar.addView(chip("+") { cv.setStrokeW(obj().strokeW + 0.1f) })
+        bar.addView(chip("⧉") { cv.duplicate() }); bar.addView(chip("🗑") { cv.deleteSel() }); bar.addView(chip("⋯") { treeOpen("Properties", propNodes()) })
+        ctxBar = bar
+        addFull(bar, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, wrap, wrap, 0, 0, 0, s + m * 2)
+    }
+
+    private fun updateFullUi() {
+        if (!fullMode) return
+        if (recentTools.firstOrNull() != cv.tool) { recentTools.remove(cv.tool); recentTools.add(0, cv.tool); while (recentTools.size > 3) recentTools.removeAt(recentTools.size - 1) }
+        hotbar?.let { hb -> hb.removeAllViews(); for (t in recentTools) hb.addView(hotButton(t)) }
+        val o = obj()
+        chipFill?.let { setSwatch(it, o.fill) }; chipLine?.let { setSwatch(it, o.stroke) }
+        ctxFill?.let { setSwatch(it, o.fill) }; ctxLine?.let { setSwatch(it, o.stroke) }
+        ctxW?.text = "${fmt(o.strokeW)}mm"
+        ctxBar?.visibility = if (cv.sel.isNotEmpty()) View.VISIBLE else View.GONE
+    }
+
+    /** The overlay buttons fade while a finger is on the canvas so they never get in the way. */
+    private fun fadeFull(touching: Boolean) {
+        if (!fullMode) return
+        fadeHandler.removeCallbacksAndMessages(null)
+        if (touching) fullViews.forEach { it.animate().alpha(0.12f).setDuration(120).start() }
+        else fadeHandler.postDelayed({ fullViews.forEach { it.animate().alpha(1f).setDuration(250).start() } }, 900)
+    }
+
+    // ---------- pages ----------
+    private fun dpiZipMenu() = menu("Resolution", listOf(72, 150, 300).map { dpi ->
+        "$dpi DPI" to { write("pages.zip", "application/zip") { os -> Export.zipPng(cv.pages, dpi, os) } }
+    })
+
+    private fun pagesMenu() {
+        val items = mutableListOf<Pair<String, () -> Unit>>()
+        for ((i, p) in cv.pages.withIndex()) items.add(((if (i == cv.pageIdx) "● " else "○ ") + "Page ${i + 1}   ${fmt(p.w)} × ${fmt(p.h)} mm, ${p.objs.size} objects") to { cv.setPage(i) })
+        items.add("＋ Add page (same size)" to { cv.addPage() })
+        items.add("⧉ Duplicate this page" to { cv.duplicatePage() })
+        items.add("🗑 Delete this page" to {
+            if (cv.pages.size <= 1) toast("A document needs at least one page")
+            else AlertDialog.Builder(this, R.style.AppDialog).setTitle("Delete page ${cv.pageIdx + 1}?").setMessage("This cannot be undone.")
+                .setPositiveButton("Delete") { _, _ -> cv.deletePage() }.setNegativeButton("Cancel", null).show()
+        })
+        items.add("◀ Move this page earlier" to { cv.movePage(-1) })
+        items.add("▶ Move this page later" to { cv.movePage(1) })
+        menu("Pages", items)
     }
 
     // ---------- trace bitmap / symbol library ----------
@@ -1115,7 +1416,7 @@ class MainActivity : AppCompatActivity() {
         cb("Invert", invert) { invert = it }
         cb("Hide the original image in the preview", hideImg) { hideImg = it }
         val sv = ScrollView(this).apply { addView(col) }
-        val dlg = AlertDialog.Builder(this).setTitle("Trace bitmap - live preview")
+        val dlg = AlertDialog.Builder(this, R.style.AppDialog).setTitle("Trace bitmap - live preview")
             .setView(FrameLayout(this).apply { addView(sv, FrameLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.36f).toInt())) })
             .setPositiveButton("Trace") { _, _ ->
                 handler.removeCallbacks(update); gen++; cv.clearTracePreview()
@@ -1143,7 +1444,7 @@ class MainActivity : AppCompatActivity() {
     private fun saveSymbolDialog() {
         val d = cv.docOfSelection() ?: run { toast("Select something first"); return }
         val et = EditText(this).apply { hint = "Symbol name"; setSingleLine() }
-        AlertDialog.Builder(this).setTitle("Save symbol")
+        AlertDialog.Builder(this, R.style.AppDialog).setTitle("Save symbol")
             .setView(FrameLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(et) })
             .setPositiveButton("Save") { _, _ ->
                 val n = et.text.toString().trim().replace(Regex("[^A-Za-z0-9 _-]"), "_").ifEmpty { "Symbol" }
@@ -1206,7 +1507,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveStyleDialog() {
         val et = EditText(this).apply { hint = "Style name"; setSingleLine() }
-        AlertDialog.Builder(this).setTitle("Save style (from the selection, or the current default)")
+        AlertDialog.Builder(this, R.style.AppDialog).setTitle("Save style (from the selection, or the current default)")
             .setView(FrameLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(et) })
             .setPositiveButton("Save") { _, _ -> val l = styleList(); l.add(styleToJson(obj(), et.text.toString().trim().ifEmpty { "Style" })); saveStyleList(l) }
             .setNegativeButton("Cancel", null).show()
@@ -1224,7 +1525,7 @@ class MainActivity : AppCompatActivity() {
     private var alignToPage = false
 
     private fun alignMenu() {
-        menu("Align to " + (if (alignToPage) "page" else "selection"), listOf(
+        menu("Align", listOf(
             (if (alignToPage) "Aligning to: page  (tap to use selection)" else "Aligning to: selection  (tap to use page)") to { alignToPage = !alignToPage; alignMenu() },
             "Left" to { cv.align(0, alignToPage) }, "Centre horizontally" to { cv.align(1, alignToPage) }, "Right" to { cv.align(2, alignToPage) },
             "Top" to { cv.align(3, alignToPage) }, "Centre vertically" to { cv.align(4, alignToPage) }, "Bottom" to { cv.align(5, alignToPage) }))
@@ -1279,7 +1580,7 @@ class MainActivity : AppCompatActivity() {
     // ---------- Storage (SAF) ----------
     private fun loadProject(uri: Uri) = try {
         val txt = contentResolver.openInputStream(uri)!!.use { String(it.readBytes()) }
-        cv.newDoc(Doc.fromJson(JSONObject(txt))); toast("Opened")
+        val (pl, pc) = Project.fromJson(JSONObject(txt)); cv.loadProject(pl, pc); toast("Opened" + (if (pl.size > 1) " (${pl.size} pages)" else ""))
     } catch (e: Exception) { toast("Could not open: ${e.message}") }
 
     private fun loadImage(uri: Uri) = try {

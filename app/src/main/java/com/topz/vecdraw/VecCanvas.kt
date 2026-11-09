@@ -50,7 +50,10 @@ class VecCanvas(ctx: Context) : View(ctx) {
         var clip: List<VObj> = emptyList(); var pasteCount = 0
     }
 
-    var doc = Doc()
+    var pages = mutableListOf(Doc()); var pageIdx = 0
+    var doc: Doc                                   // the page being edited
+        get() = pages[pageIdx]
+        set(value) { pages[pageIdx] = value }
     var scale = 3.78f; var panX = 30f; var panY = 30f
     var tool = Tool.PICK
         set(v) { finishPen(); p3 = 0; field = v; meshV = -1; if (v == Tool.ENVELOPE) envInit() else envQ = null; if (v != Tool.NODE) selNode = -1; invalidate(); status(); onChange() }
@@ -65,12 +68,13 @@ class VecCanvas(ctx: Context) : View(ctx) {
     var snapRadius = 10f; var snapNodes = true; var snapCenters = false; var snapEdges = false
     var freehandEps = 2f; var undoLimit = 60
     var handleScale = 1f   // size of touch handles / hit areas
-    var showRulers = true; var tapGestures = true
+    var showRulers = true; var tapGestures = true; var rulersSuppressed = false   // rulers are hidden in the full-canvas layout
+    var onTouching: (Boolean) -> Unit = {}
     var lassoMode = 2   // 0 = inside shapes only, 1 = gaps outside shapes only, 2 = anywhere
     var pressureStroke = true   // stylus pressure gives the Freehand tool a variable width
     private var guideAxis = 0; private var guideIdx = -1; private var guideVal = 0f      // axis 0 = vertical guide (x), 1 = horizontal (y)
     private var maxPtr = 0; private var tapT = 0L; private var tapX = 0f; private var tapY = 0f; private var tapMoved = false; private var gestureScaled = false
-    private val rulerPx: Float get() = if (showRulers) 22f * resources.displayMetrics.density else 0f
+    private val rulerPx: Float get() = if (showRulers && !rulersSuppressed) 22f * resources.displayMetrics.density else 0f
     var meshRows = 3; var meshCols = 3; private var meshV = -1
     private var meshHdir = -1
     var polySides = 6; var starPts = 5; var basicIdx = 0
@@ -132,13 +136,17 @@ class VecCanvas(ctx: Context) : View(ctx) {
     }
     fun zoomPage() = fit()
     fun zoomSel() { val b = selBounds() ?: return; val m = max(b.width(), b.height()) * 0.12f; zoomRect(RectF(b.left - m, b.top - m, b.right + m, b.bottom + m)) }
+    fun zoomBy(f: Float) {
+        val cxs = width / 2f; val cys = height / 2f; val ns = (scale * f).coerceIn(0.3f, 400f); val k = ns / scale
+        panX = cxs - (cxs - panX) * k; panY = cys - (cys - panY) * k; scale = ns; invalidate(); status()
+    }
     fun zoom100() {
         val cxd = docX(width / 2f); val cyd = docY(height / 2f); scale = 3.7795f
         panX = width / 2f - cxd * scale; panY = height / 2f - cyd * scale; invalidate(); status()
     }
 
     fun status(extra: String = "") {
-        onStatus(extra + "  ${tool.label}  ${(scale / 3.7795f * 100).roundToInt()}%  ${doc.unit}")
+        onStatus(extra + "  ${tool.label}  ${(scale / 3.7795f * 100).roundToInt()}%  ${doc.unit}" + (if (pages.size > 1) "  p${pageIdx + 1}/${pages.size}" else ""))
     }
 
     fun applyTheme() {
@@ -154,7 +162,25 @@ class VecCanvas(ctx: Context) : View(ctx) {
     private fun ensureCk() { if (!gCk) { checkpoint(); gCk = true } }
     fun undo() { if (uStack.isEmpty()) return; rStack.addLast(doc.objs.map { it.copy() }); doc.objs = uStack.removeLast().toMutableList(); sel.clear(); selNode = -1; envQ = null; changed() }
     fun redo() { if (rStack.isEmpty()) return; uStack.addLast(doc.objs.map { it.copy() }); doc.objs = rStack.removeLast().toMutableList(); sel.clear(); selNode = -1; envQ = null; changed() }
-    fun newDoc(d: Doc) { doc = d; sel.clear(); selNode = -1; uStack.clear(); rStack.clear(); activeLayer = 0; fit(); changed() }
+    fun newDoc(d: Doc) { finishPen(); pages = mutableListOf(d); pageIdx = 0; afterPageChange() }
+    fun loadProject(list: List<Doc>, cur: Int) { finishPen(); pages = list.toMutableList(); pageIdx = cur.coerceIn(0, pages.lastIndex); afterPageChange() }
+    fun projectJson() = Project.toJson(pages, pageIdx)
+    private fun afterPageChange() { finishPen(); sel.clear(); selNode = -1; uStack.clear(); rStack.clear(); activeLayer = 0; fit(); changed() }
+
+    // ---------- pages (undo history is per visit: it is cleared when you switch page) ----------
+    fun setPage(i: Int) { finishPen(); if (i !in pages.indices || i == pageIdx) return; pageIdx = i; afterPageChange() }
+    fun addPage() {
+        finishPen(); val d = Doc(); d.w = doc.w; d.h = doc.h; d.unit = doc.unit; d.grid = doc.grid
+        pages.add(pageIdx + 1, d); pageIdx += 1; afterPageChange()
+    }
+    fun duplicatePage() {
+        finishPen(); val s = doc; val d = Doc(); d.w = s.w; d.h = s.h; d.unit = s.unit; d.grid = s.grid
+        d.layers.clear(); s.layers.forEach { d.layers.add(Layer(it.name, it.visible, it.locked, it.opacity)) }
+        d.objs = s.objs.map { it.copy() }.toMutableList(); d.hg.addAll(s.hg); d.vg.addAll(s.vg)
+        pages.add(pageIdx + 1, d); pageIdx += 1; afterPageChange()
+    }
+    fun deletePage(): Boolean { finishPen(); if (pages.size <= 1) return false; pages.removeAt(pageIdx); pageIdx = min(pageIdx, pages.lastIndex); afterPageChange(); return true }
+    fun movePage(dir: Int) { val j = pageIdx + dir; if (j !in pages.indices) return; java.util.Collections.swap(pages, pageIdx, j); pageIdx = j; changed() }
 
     // ---------- object creation ----------
     fun copyStyle(s: VObj, d: VObj) {
@@ -372,6 +398,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     override fun onTouchEvent(e: MotionEvent): Boolean {
         sd.onTouchEvent(e); gd.onTouchEvent(e)
         curPressure = e.pressure; curStylus = e.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
+        if (e.actionMasked == MotionEvent.ACTION_DOWN) onTouching(true) else if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) onTouching(false)
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> { maxPtr = 1; tapT = e.eventTime; tapX = e.x; tapY = e.y; tapMoved = false; gestureScaled = false }
             MotionEvent.ACTION_POINTER_DOWN -> maxPtr = max(maxPtr, e.pointerCount)

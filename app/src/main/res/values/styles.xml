@@ -4,4 +4,16 @@
         <item name="android:statusBarColor">#0B192C</item>
         <item name="android:navigationBarColor">#0B192C</item>
     </style>
+    <style name="AppDialog" parent="Theme.AppCompat.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/dialog_bg</item>
+        <item name="android:textColorPrimary">#EAEFF5</item>
+        <item name="android:textColorSecondary">#B8C0CC</item>
+        <item name="android:textColorAlertDialogListItem">#EAEFF5</item>
+        <item name="colorAccent">#E5A93C</item>
+        <item name="android:colorAccent">#E5A93C</item>
+        <item name="buttonBarButtonStyle">@style/AppDialogButton</item>
+    </style>
+    <style name="AppDialogButton" parent="Widget.AppCompat.Button.ButtonBar.AlertDialog">
+        <item name="android:textColor">#E5A93C</item>
+    </style>
 </resources>

@@ -382,14 +382,34 @@ object Export {
         return sb.append("</svg>\n").toString()
     }
 
-    /** Vector PDF via PdfDocument: paths/text stay vector; page is in PostScript points. */
-    fun pdf(doc: Doc, out: OutputStream) {
+    /** Vector PDF via PdfDocument: paths/text stay vector; every page keeps its own size (PostScript points). */
+    fun pdfPages(docs: List<Doc>, out: OutputStream) {
         val pd = PdfDocument(); val k = 72f / 25.4f
-        val page = pd.startPage(PdfDocument.PageInfo.Builder((doc.w * k).roundToInt(), (doc.h * k).roundToInt(), 1).create())
-        page.canvas.scale(k, k); page.canvas.clipRect(0f, 0f, doc.w, doc.h)
-        Render.rasterMasks = true
-        try { Render.drawAll(page.canvas, doc) } finally { Render.rasterMasks = false }
-        pd.finishPage(page); pd.writeTo(out); pd.close()
+        docs.forEachIndexed { i, doc ->
+            val page = pd.startPage(PdfDocument.PageInfo.Builder((doc.w * k).roundToInt().coerceAtLeast(1), (doc.h * k).roundToInt().coerceAtLeast(1), i + 1).create())
+            page.canvas.scale(k, k); page.canvas.clipRect(0f, 0f, doc.w, doc.h)
+            Render.rasterMasks = true
+            try { Render.drawAll(page.canvas, doc) } finally { Render.rasterMasks = false }
+            pd.finishPage(page)
+        }
+        pd.writeTo(out); pd.close()
+    }
+
+    fun pdf(doc: Doc, out: OutputStream) = pdfPages(listOf(doc), out)
+
+    fun zipSvg(docs: List<Doc>, out: OutputStream) {
+        val z = java.util.zip.ZipOutputStream(out)
+        docs.forEachIndexed { i, d -> z.putNextEntry(java.util.zip.ZipEntry("page${i + 1}.svg")); z.write(svg(d).toByteArray()); z.closeEntry() }
+        z.finish()
+    }
+
+    fun zipPng(docs: List<Doc>, dpi: Int, out: OutputStream) {
+        val z = java.util.zip.ZipOutputStream(out)
+        docs.forEachIndexed { i, d ->
+            val b = bitmap(d, safeDpi(d, dpi), false)
+            z.putNextEntry(java.util.zip.ZipEntry("page${i + 1}.png")); b.compress(Bitmap.CompressFormat.PNG, 100, z); z.closeEntry(); b.recycle()
+        }
+        z.finish()
     }
 
     /** Lowers DPI if the bitmap would exceed ~40 megapixels (OOM guard). */

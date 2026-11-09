@@ -287,3 +287,17 @@ class Doc {
         }
     }
 }
+
+/** A document made of several pages; each page is a Doc (own size, layers, guides, objects). Old single-page files still load. */
+object Project {
+    fun toJson(pages: List<Doc>, cur: Int): JSONObject = JSONObject().put("app", "VecDraw by Topz").put("v", 2).put("cur", cur)
+        .put("pages", JSONArray().also { a -> pages.forEach { a.put(it.toJson()) } })
+
+    fun fromJson(j: JSONObject): Pair<List<Doc>, Int> {
+        if (j.has("pages")) {
+            val arr = j.getJSONArray("pages"); val l = List(arr.length()) { Doc.fromJson(arr.getJSONObject(it)) }
+            return (if (l.isEmpty()) listOf(Doc()) else l) to j.optInt("cur", 0).coerceIn(0, maxOf(0, l.size - 1))
+        }
+        return listOf(Doc.fromJson(j)) to 0
+    }
+}
