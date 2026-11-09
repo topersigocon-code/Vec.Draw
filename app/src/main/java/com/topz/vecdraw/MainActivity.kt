@@ -251,8 +251,14 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Fonts.init(filesDir)
+        val crashedBefore = java.io.File(filesDir, "crash.txt").exists()
+        val prevHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try { java.io.File(filesDir, "crash.txt").writeText(android.util.Log.getStackTraceString(e)) } catch (x: Exception) { }
+            prevHandler?.uncaughtException(t, e)
+        }
         root = FrameLayout(this); cv = VecCanvas(this)
-        root.addView(cv, FrameLayout.LayoutParams(-1, -1)); setContentView(root); restoreSettings(); restoreDoc()
+        root.addView(cv, FrameLayout.LayoutParams(-1, -1)); setContentView(root); restoreSettings(); if (crashedBefore) fullMode = false; restoreDoc()
         cv.onChange = { refreshers.forEach { it() } }
         cv.onText = { o, isNew -> textDialog(o, isNew) }
         addPanel("Toolbox", toolbox(), true)
@@ -265,6 +271,7 @@ class MainActivity : AppCompatActivity() {
         applyPanelPrefs()
         refreshers.add { updateFullUi() }
         cv.onTouching = { fadeFull(it) }
+        root.postDelayed({ showCrashReport() }, 700)
         root.doOnLayout { cv.fit(); layoutPanels(); refreshers.forEach { it() } }
     }
 
@@ -1107,8 +1114,30 @@ class MainActivity : AppCompatActivity() {
     // ---------- themed popup tree + full-canvas layout ----------
     private var tree: TreePopup? = null
     private fun treePopup(): TreePopup = tree ?: TreePopup(this, root).also { tree = it }
-    private fun treeOpen(title: String, nodes: List<MNode>) = treePopup().open(title, nodes)
-    private fun treeOpenView(title: String, build: (() -> Unit) -> View, onClose: (() -> Unit)? = null) = treePopup().openView(title, build, onClose)
+    private fun treeOpen(title: String, nodes: List<MNode>) { try { treePopup().open(title, nodes) } catch (e: Throwable) { tree = null; reportError(e) } }
+    private fun treeOpenView(title: String, build: (() -> Unit) -> View, onClose: (() -> Unit)? = null) { try { treePopup().openView(title, build, onClose) } catch (e: Throwable) { tree = null; reportError(e) } }
+
+    /** Keep the stack trace of a handled error so it can be shown (and copied) the next time the app starts. */
+    private fun reportError(e: Throwable) {
+        try { java.io.File(filesDir, "crash.txt").writeText(android.util.Log.getStackTraceString(e)) } catch (x: Exception) { }
+        toast("Something went wrong. The details are saved - they will be shown next time the app opens.")
+    }
+
+    /** If the app crashed (or hit a handled error) last time, show the technical details with a Copy button. */
+    private fun showCrashReport() {
+        val f = java.io.File(filesDir, "crash.txt"); if (!f.exists()) return
+        try {
+            val txt = f.readText()
+            val tv = TextView(this).apply { text = txt.take(6000); textSize = 10f; setTextIsSelectable(true); setTextColor(Color.WHITE); setPadding(dp(16), dp(8), dp(16), dp(8)) }
+            AlertDialog.Builder(this, R.style.AppDialog).setTitle("The app had a problem last time")
+                .setView(ScrollView(this).apply { addView(tv) })
+                .setPositiveButton("Copy") { _, _ ->
+                    (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("VecDraw crash report", txt))
+                    f.delete(); toast("Copied - paste it in the chat")
+                }
+                .setNegativeButton("Close") { _, _ -> f.delete() }.show()
+        } catch (e: Exception) { f.delete() }
+    }
 
     private var fullMode = false; private var leftHanded = false
     private val fullViews = ArrayList<View>()
@@ -1251,6 +1280,13 @@ class MainActivity : AppCompatActivity() {
     private fun setLayout(full: Boolean) { fullMode = full; applyLayoutMode(); saveUi() }
 
     private fun applyLayoutMode() {
+        try { applyLayoutModeUnsafe() } catch (e: Throwable) {
+            reportError(e); fullMode = false; fullViews.forEach { root.removeView(it) }; fullViews.clear(); cv.rulersSuppressed = false
+            panels.values.forEach { it.visibility = View.VISIBLE }; root.post { reflow() }
+        }
+    }
+
+    private fun applyLayoutModeUnsafe() {
         tree?.dismiss()
         fullViews.forEach { root.removeView(it) }; fullViews.clear()
         fullStatus = null; ctxBar = null; hotbar = null; chipFill = null; chipLine = null; ctxFill = null; ctxLine = null; ctxW = null

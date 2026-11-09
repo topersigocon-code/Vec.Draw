@@ -55,10 +55,11 @@ class TreePopup(private val ctx: Context, private val host: View) {
     fun dismiss() { pop?.dismiss() }
 
     private fun createWindow() {
+        body.removeAllViews()
         val p = PopupWindow(ctx)
         p.contentView = FrameLayout(ctx).apply {
             background = GradientDrawable().apply { setColor(0xF51F2329.toInt()); cornerRadius = dp(16).toFloat(); setStroke(dp(1), 0x88E5A93C.toInt()) }
-            setPadding(dp(6), dp(6), dp(6), dp(6)); addView(body)
+            setPadding(dp(6), dp(6), dp(6), dp(6)); (body.parent as? ViewGroup)?.removeView(body); addView(body)
         }
         p.isFocusable = true; p.isOutsideTouchable = true; p.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         p.setOnDismissListener { for (l in stack.reversed()) l.onClose?.invoke(); stack.clear() }
