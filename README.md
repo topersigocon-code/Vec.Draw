@@ -22,3 +22,9 @@ Batch A: Trace bitmap (threshold / colour levels, holes), Put inside shape (live
 Trace bitmap now has a live preview panel (canvas stays visible; computed off the UI thread) and a centerline mode (thinning -> open stroked lines).
 B1 multi-page: a project is a list of pages (each its own size, layers, guides); Quick bar ◀ n/m ▶ and ☰ → Pages…; PDF of all pages, ZIP of per-page SVG / PNG; .vdt v2 (older single-page files still open). Undo history resets when switching page.
 Layouts: Classic panels (default) or Full canvas (Settings -> Layout, or menu -> Layout): small buttons (menu, last-3-tools hotbar, undo/redo/settings, zoom/fit, colours), contextual bar when something is selected, popup tree menu with any depth, left-handed mirror, buttons fade while drawing. All menus and dialogs share the app theme; colour dialog has a colour wheel.
+
+## Development status
+
+See [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md) for the staged plan and [QA_CHECKLIST.md](QA_CHECKLIST.md) for regression testing. The Object Manager now includes layer rename, duplicate, reorder, and delete actions; deleting a layer moves its objects to a surviving layer. These operations retain the existing `.vdt` layer-index representation.
+
+Build validation is still required on an Android SDK-equipped environment. Do not treat source inspection alone as proof that a release APK works on-device.

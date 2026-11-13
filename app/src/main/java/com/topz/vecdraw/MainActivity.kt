@@ -967,6 +967,11 @@ class MainActivity : AppCompatActivity() {
                 r.addView(chip(if (l.locked) "🔒" else "🔓") { l.locked = !l.locked; cv.changed() })
                 r.addView(chip("α${(l.opacity * 100).toInt()}") { numDialog("Layer opacity %", listOf("0-100"), listOf(l.opacity * 100)) { v -> l.opacity = (v[0] / 100f).coerceIn(0f, 1f); cv.changed() } })
                 r.addView(TextView(this).apply { text = (if (li == cv.activeLayer) "● " else "○ ") + l.name; setTextColor(if (li == cv.activeLayer) GOLD else Color.WHITE); textSize = 12f; setPadding(dp(6), dp(6), dp(6), dp(6)); setOnClickListener { cv.activeLayer = li; cv.changed() } })
+                r.addView(chip("✎") { renameLayer(li) })
+                r.addView(chip("＋⧉") { duplicateLayer(li) })
+                r.addView(chip("↑") { moveLayer(li, 1) })
+                r.addView(chip("↓") { moveLayer(li, -1) })
+                r.addView(chip("×") { deleteLayer(li) })
                 col.addView(r)
                 for (i in cv.doc.objs.indices.reversed()) {
                     val o = cv.doc.objs[i]; if (o.layer != li) continue
@@ -983,6 +988,68 @@ class MainActivity : AppCompatActivity() {
             }
         }
         return ScrollView(this).apply { addView(col) }
+    }
+
+    // Layer operations keep the legacy integer layer references stable in existing .vdt files.
+    private fun renameLayer(index: Int) {
+        val layer = cv.doc.layers.getOrNull(index) ?: return
+        val field = EditText(this).apply { setText(layer.name); setSingleLine(true); setSelection(text.length) }
+        AlertDialog.Builder(this, R.style.AppDialog).setTitle("Rename layer").setView(field)
+            .setNegativeButton("Cancel", null).setPositiveButton("Save") { _, _ ->
+                val name = field.text.toString().trim()
+                if (name.isNotEmpty()) { layer.name = name; cv.changed() } else toast("Layer name cannot be empty")
+            }.show()
+    }
+
+    private fun duplicateLayer(index: Int) {
+        val source = cv.doc.layers.getOrNull(index) ?: return
+        val insertAt = index + 1
+        cv.doc.layers.add(insertAt, Layer("${source.name} copy", source.visible, source.locked, source.opacity))
+        val copies = cv.doc.objs.filter { it.layer == index }.map { it.copy().also { copy -> copy.layer = insertAt } }
+        cv.doc.objs.forEach { if (it.layer > index) it.layer++ }
+        cv.doc.objs.addAll(copies)
+        cv.activeLayer = insertAt
+        cv.changed()
+    }
+
+    /** direction: +1 moves the layer toward the top of the stack; -1 toward the bottom. */
+    private fun moveLayer(index: Int, direction: Int) {
+        val target = index + direction
+        if (index !in cv.doc.layers.indices || target !in cv.doc.layers.indices) return
+        java.util.Collections.swap(cv.doc.layers, index, target)
+        cv.doc.objs.forEach { obj ->
+            obj.layer = when (obj.layer) {
+                index -> target
+                target -> index
+                else -> obj.layer
+            }
+        }
+        cv.activeLayer = when (cv.activeLayer) { index -> target; target -> index; else -> cv.activeLayer }
+        cv.changed()
+    }
+
+    private fun deleteLayer(index: Int) {
+        if (index !in cv.doc.layers.indices) return
+        if (cv.doc.layers.size <= 1) { toast("A document must keep at least one layer"); return }
+        val target = if (index > 0) index - 1 else 1
+        val targetAfterRemoval = if (target > index) target - 1 else target
+        AlertDialog.Builder(this, R.style.AppDialog).setTitle("Delete ${cv.doc.layers[index].name}?")
+            .setMessage("Objects on this layer will be moved to ${cv.doc.layers[target].name}.")
+            .setNegativeButton("Cancel", null).setPositiveButton("Delete") { _, _ ->
+                cv.doc.objs.forEach { obj ->
+                    when {
+                        obj.layer == index -> obj.layer = targetAfterRemoval
+                        obj.layer > index -> obj.layer--
+                    }
+                }
+                cv.doc.layers.removeAt(index)
+                cv.activeLayer = when {
+                    cv.activeLayer == index -> targetAfterRemoval
+                    cv.activeLayer > index -> cv.activeLayer - 1
+                    else -> cv.activeLayer
+                }.coerceIn(0, cv.doc.layers.lastIndex)
+                cv.changed()
+            }.show()
     }
 
     // ---------- Status bar with snapping toggles ----------
