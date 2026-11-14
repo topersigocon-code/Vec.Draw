@@ -25,6 +25,6 @@ Layouts: Classic panels (default) or Full canvas (Settings -> Layout, or menu ->
 
 ## Development status
 
-See [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md) for the staged plan and [QA_CHECKLIST.md](QA_CHECKLIST.md) for regression testing. The Object Manager now includes layer rename, duplicate, reorder, and delete actions; deleting a layer moves its objects to a surviving layer. These operations retain the existing `.vdt` layer-index representation.
+See [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md) for the staged plan and [QA_CHECKLIST.md](QA_CHECKLIST.md) for regression testing. The Object Manager now includes layer rename, duplicate, reorder, and delete actions; deleting a layer moves its objects to a surviving layer. These operations retain the existing `.vdt` layer-index representation. Undo/redo snapshots now cover the active page's object data, layers, guides, dimensions, unit, grid spacing, and active layer; page-list operations remain outside undo history for now.
 
 Build validation is still required on an Android SDK-equipped environment. Do not treat source inspection alone as proof that a release APK works on-device.

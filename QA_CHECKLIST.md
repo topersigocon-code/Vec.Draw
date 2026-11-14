@@ -8,6 +8,16 @@ Run these checks on a debug APK built from the same commit. Record device model,
 - [ ] Save As, close, reopen, and compare page count, dimensions, layers, guides, text, paths, and embedded images.
 - [ ] Pause/resume the app and verify autosave recovery.
 
+## Undo/redo and document state
+- [ ] Draw an object, undo, and redo; verify geometry and styling are restored.
+- [ ] Add, rename, duplicate, reorder, and delete layers; undo and redo each operation.
+- [ ] Toggle layer and object visibility/locking; undo and redo each change.
+- [ ] Change page dimensions, units, and grid spacing; undo and redo each change.
+- [ ] Add/move/remove guides; verify guide edits participate in undo/redo.
+- [ ] Cancel an in-progress drag and verify the full pre-gesture document state is restored.
+- [ ] Verify the configured undo limit is respected on a large document.
+- [ ] Confirm page add/delete/reorder history behavior is documented (project-level history is not yet implemented).
+
 ## Layers and Object Manager
 - [ ] Add and rename a layer; verify the name persists after save/reopen.
 - [ ] Duplicate a populated layer; verify objects are copied and remain independently editable.

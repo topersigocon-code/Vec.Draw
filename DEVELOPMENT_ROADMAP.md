@@ -21,7 +21,8 @@ This roadmap prioritizes a reliable Android vector editor while preserving the e
 
 ## Milestone 1 — Core editing reliability
 
-- [ ] Make undo/redo cover document structure (layers, guides, pages, and objects), not only object lists.
+- [x] Expand undo/redo snapshots to cover the active page's objects, layers, guides, page dimensions, unit, and grid settings.
+- [ ] Extend undo/redo to page-list operations (add, duplicate, delete, reorder) with project-level history.
 - [ ] Add stable object names and a searchable object/layer tree.
 - [ ] Add object rename, duplicate, reorder, isolate, and multi-select operations.
 - [ ] Ensure hidden and locked objects cannot be accidentally selected or edited.

@@ -845,7 +845,7 @@ class MainActivity : AppCompatActivity() {
         val ex = field(); val ey = field(); val ew = field(); val eh = field()
         val applyBounds = { cv.setBounds(f(ex.text, 0f) * uf(), f(ey.text, 0f) * uf(), f(ew.text, 1f) * uf(), f(eh.text, 1f) * uf()) }
         listOf(ex, ey, ew, eh).forEach { e -> e.setOnEditorActionListener { _, _, _ -> applyBounds(); e.clearFocus(); true } }
-        val unitC = chip("mm") { menu("Units", listOf("mm", "cm", "in", "px").map { u -> u to { cv.doc.unit = u; cv.changed(); cv.status() } }) }
+        val unitC = chip("mm") { menu("Units", listOf("mm", "cm", "in", "px").map { u -> u to { cv.checkpoint(); cv.doc.unit = u; cv.changed(); cv.status() } }) }
         val titles = mutableListOf<TextView>()
         fun group(title: String, vararg items: View) {
             val g = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), dp(2), dp(10), dp(2)) }
@@ -958,14 +958,14 @@ class MainActivity : AppCompatActivity() {
         refreshers.add {
             col.removeAllViews()
             val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            listOf("＋Layer" to { cv.doc.layers.add(Layer("Layer ${cv.doc.layers.size + 1}")); cv.activeLayer = cv.doc.layers.lastIndex; cv.changed() },
+            listOf("＋Layer" to { cv.checkpoint(); cv.doc.layers.add(Layer("Layer ${cv.doc.layers.size + 1}")); cv.activeLayer = cv.doc.layers.lastIndex; cv.changed() },
                 "▲" to { cv.order(true, true) }, "▼" to { cv.order(false, true) }, "⧉" to { cv.duplicate() }, "🗑" to { cv.deleteSel() }).forEach { (t, a) -> bar.addView(chip(t, a)) }
             col.addView(hscroll(bar))
             for (li in cv.doc.layers.indices.reversed()) {
                 val l = cv.doc.layers[li]; val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-                r.addView(chip(if (l.visible) "👁" else "—") { l.visible = !l.visible; cv.changed() })
-                r.addView(chip(if (l.locked) "🔒" else "🔓") { l.locked = !l.locked; cv.changed() })
-                r.addView(chip("α${(l.opacity * 100).toInt()}") { numDialog("Layer opacity %", listOf("0-100"), listOf(l.opacity * 100)) { v -> l.opacity = (v[0] / 100f).coerceIn(0f, 1f); cv.changed() } })
+                r.addView(chip(if (l.visible) "👁" else "—") { cv.checkpoint(); l.visible = !l.visible; cv.changed() })
+                r.addView(chip(if (l.locked) "🔒" else "🔓") { cv.checkpoint(); l.locked = !l.locked; cv.changed() })
+                r.addView(chip("α${(l.opacity * 100).toInt()}") { numDialog("Layer opacity %", listOf("0-100"), listOf(l.opacity * 100)) { v -> cv.checkpoint(); l.opacity = (v[0] / 100f).coerceIn(0f, 1f); cv.changed() } })
                 r.addView(TextView(this).apply { text = (if (li == cv.activeLayer) "● " else "○ ") + l.name; setTextColor(if (li == cv.activeLayer) GOLD else Color.WHITE); textSize = 12f; setPadding(dp(6), dp(6), dp(6), dp(6)); setOnClickListener { cv.activeLayer = li; cv.changed() } })
                 r.addView(chip("✎") { renameLayer(li) })
                 r.addView(chip("＋⧉") { duplicateLayer(li) })
@@ -976,8 +976,8 @@ class MainActivity : AppCompatActivity() {
                 for (i in cv.doc.objs.indices.reversed()) {
                     val o = cv.doc.objs[i]; if (o.layer != li) continue
                     val or = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(18), 0, 0, 0) }
-                    or.addView(chip(if (o.visible) "👁" else "—") { o.visible = !o.visible; cv.changed() })
-                    or.addView(chip(if (o.locked) "🔒" else "🔓") { o.locked = !o.locked; cv.changed() })
+                    or.addView(chip(if (o.visible) "👁" else "—") { cv.checkpoint(); o.visible = !o.visible; cv.changed() })
+                    or.addView(chip(if (o.locked) "🔒" else "🔓") { cv.checkpoint(); o.locked = !o.locked; cv.changed() })
                     or.addView(TextView(this).apply {
                         text = "${o.kind.name.lowercase()} #${i + 1}${if (o.group != 0) " ▣${o.group}" else ""}${if (o.holes.isNotEmpty()) " ◌" else ""}${if (o.kind == Kind.TEXT) " “" + o.text.take(10) + "”" else ""}"
                         setTextColor(if (o in cv.sel) GOLD else Color.WHITE); textSize = 12f; setPadding(dp(6), dp(5), dp(6), dp(5))
@@ -997,13 +997,14 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this, R.style.AppDialog).setTitle("Rename layer").setView(field)
             .setNegativeButton("Cancel", null).setPositiveButton("Save") { _, _ ->
                 val name = field.text.toString().trim()
-                if (name.isNotEmpty()) { layer.name = name; cv.changed() } else toast("Layer name cannot be empty")
+                if (name.isNotEmpty()) { cv.checkpoint(); layer.name = name; cv.changed() } else toast("Layer name cannot be empty")
             }.show()
     }
 
     private fun duplicateLayer(index: Int) {
         val source = cv.doc.layers.getOrNull(index) ?: return
         val insertAt = index + 1
+        cv.checkpoint()
         cv.doc.layers.add(insertAt, Layer("${source.name} copy", source.visible, source.locked, source.opacity))
         val copies = cv.doc.objs.filter { it.layer == index }.map { it.copy().also { copy -> copy.layer = insertAt } }
         cv.doc.objs.forEach { if (it.layer > index) it.layer++ }
@@ -1016,6 +1017,7 @@ class MainActivity : AppCompatActivity() {
     private fun moveLayer(index: Int, direction: Int) {
         val target = index + direction
         if (index !in cv.doc.layers.indices || target !in cv.doc.layers.indices) return
+        cv.checkpoint()
         java.util.Collections.swap(cv.doc.layers, index, target)
         cv.doc.objs.forEach { obj ->
             obj.layer = when (obj.layer) {
@@ -1036,6 +1038,7 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this, R.style.AppDialog).setTitle("Delete ${cv.doc.layers[index].name}?")
             .setMessage("Objects on this layer will be moved to ${cv.doc.layers[target].name}.")
             .setNegativeButton("Cancel", null).setPositiveButton("Delete") { _, _ ->
+                cv.checkpoint()
                 cv.doc.objs.forEach { obj ->
                     when {
                         obj.layer == index -> obj.layer = targetAfterRemoval
@@ -1147,12 +1150,12 @@ class MainActivity : AppCompatActivity() {
         "A4 (210×297 mm)" to { setPage(210f, 297f) }, "A3 (297×420 mm)" to { setPage(297f, 420f) }, "Letter (215.9×279.4 mm)" to { setPage(215.9f, 279.4f) },
         "Custom size…" to { val u = uf(); numDialog("Page size (${cv.doc.unit})", listOf("Width", "Height"), listOf(cv.doc.w / u, cv.doc.h / u)) { setPage(it[0] * u, it[1] * u) } },
         "Swap orientation" to { setPage(cv.doc.h, cv.doc.w) },
-        "Grid spacing…" to { val u = uf(); numDialog("Grid (${cv.doc.unit})", listOf("Spacing"), listOf(cv.doc.grid / u)) { cv.doc.grid = (it[0] * u).coerceAtLeast(0.1f); cv.invalidate() } },
-        "Add vertical guide…" to { val u = uf(); numDialog("Guide X (${cv.doc.unit})", listOf("Position"), listOf(10f)) { cv.doc.vg.add(it[0] * u); cv.invalidate() } },
-        "Add horizontal guide…" to { val u = uf(); numDialog("Guide Y (${cv.doc.unit})", listOf("Position"), listOf(10f)) { cv.doc.hg.add(it[0] * u); cv.invalidate() } },
-        "Clear guides" to { cv.doc.vg.clear(); cv.doc.hg.clear(); cv.invalidate() }))
+        "Grid spacing…" to { val u = uf(); numDialog("Grid (${cv.doc.unit})", listOf("Spacing"), listOf(cv.doc.grid / u)) { cv.checkpoint(); cv.doc.grid = (it[0] * u).coerceAtLeast(0.1f); cv.invalidate(); cv.changed() } },
+        "Add vertical guide…" to { val u = uf(); numDialog("Guide X (${cv.doc.unit})", listOf("Position"), listOf(10f)) { cv.checkpoint(); cv.doc.vg.add(it[0] * u); cv.invalidate(); cv.changed() } },
+        "Add horizontal guide…" to { val u = uf(); numDialog("Guide Y (${cv.doc.unit})", listOf("Position"), listOf(10f)) { cv.checkpoint(); cv.doc.hg.add(it[0] * u); cv.invalidate(); cv.changed() } },
+        "Clear guides" to { cv.checkpoint(); cv.doc.vg.clear(); cv.doc.hg.clear(); cv.invalidate(); cv.changed() }))
 
-    private fun setPage(w: Float, h: Float) { cv.doc.w = w; cv.doc.h = h; cv.fit(); cv.changed() }
+    private fun setPage(w: Float, h: Float) { cv.checkpoint(); cv.doc.w = w; cv.doc.h = h; cv.fit(); cv.changed() }
 
     // ---------- Text dialog ----------
     private fun textDialog(o: VObj, isNew: Boolean) {
@@ -1567,7 +1570,7 @@ class MainActivity : AppCompatActivity() {
     private fun viewMenu() {
         menu("View", listOf("Zoom to page" to { cv.zoomPage() }, "Zoom to selection" to { cv.zoomSel() }, "Zoom 100%" to { cv.zoom100() },
             (if (cv.showRulers) "Hide rulers" else "Show rulers") to { cv.showRulers = !cv.showRulers; cv.fit() },
-            "Clear guides" to { cv.doc.vg.clear(); cv.doc.hg.clear(); cv.invalidate() }))
+            "Clear guides" to { cv.checkpoint(); cv.doc.vg.clear(); cv.doc.hg.clear(); cv.invalidate(); cv.changed() }))
     }
 
     private fun exportSelectionMenu() {

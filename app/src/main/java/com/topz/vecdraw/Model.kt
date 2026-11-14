@@ -265,6 +265,15 @@ class Doc {
     /** millimetres per current unit */
     fun uf() = when (unit) { "cm" -> 10f; "in" -> 25.4f; "px" -> 25.4f / 96f; else -> 1f }
 
+    /** Deep document snapshot used by undo/redo. Keeps the on-disk VDT schema unchanged. */
+    fun deepCopy(): Doc = Doc().also { copy ->
+        copy.w = w; copy.h = h; copy.unit = unit; copy.grid = grid
+        copy.layers.clear()
+        layers.forEach { copy.layers.add(Layer(it.name, it.visible, it.locked, it.opacity)) }
+        copy.objs = objs.map { it.copy() }.toMutableList()
+        copy.hg.addAll(hg); copy.vg.addAll(vg)
+    }
+
     fun toJson(): JSONObject = JSONObject().apply {
         put("app", "VecDraw by Topz"); put("v", 1); put("w", w.toDouble()); put("h", h.toDouble()); put("unit", unit); put("grid", grid.toDouble())
         put("layers", JSONArray().also { a -> layers.forEach { a.put(JSONObject().put("n", it.name).put("v", it.visible).put("l", it.locked).put("o", it.opacity.toDouble())) } })

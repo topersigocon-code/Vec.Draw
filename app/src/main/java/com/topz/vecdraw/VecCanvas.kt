@@ -41,6 +41,7 @@ enum class Tool(val label: String, val icon: String) {
 
 /** One piece of the live trace preview: filled (strokeW = 0) or stroked outline. */
 class PrevItem(val path: Path, val color: Int, val strokeW: Float)
+private data class CanvasSnapshot(val document: Doc, val activeLayer: Int)
 
 class VecCanvas(ctx: Context) : View(ctx) {
     companion object {
@@ -83,7 +84,8 @@ class VecCanvas(ctx: Context) : View(ctx) {
     var onStatus: (String) -> Unit = {}
     var onText: (VObj, Boolean) -> Unit = { _, _ -> }
 
-    private val uStack = ArrayDeque<List<VObj>>(); private val rStack = ArrayDeque<List<VObj>>()
+    // History snapshots cover the whole active page: objects, layers, guides and page settings.
+    private val uStack = ArrayDeque<CanvasSnapshot>(); private val rStack = ArrayDeque<CanvasSnapshot>()
     private var mode = M_NONE
     private var lx = 0f; private var ly = 0f
     private var sx0 = 0f; private var sy0 = 0f; private var cx = 0f; private var cy = 0f
@@ -158,10 +160,26 @@ class VecCanvas(ctx: Context) : View(ctx) {
     fun changed() { invalidate(); onChange() }
 
     // ---------- history ----------
-    fun checkpoint() { uStack.addLast(doc.objs.map { it.copy() }); while (uStack.size > undoLimit) uStack.removeFirst(); rStack.clear() }
+    private fun snapshot() = CanvasSnapshot(doc.deepCopy(), activeLayer)
+    fun checkpoint() { uStack.addLast(snapshot()); while (uStack.size > undoLimit) uStack.removeFirst(); rStack.clear() }
     private fun ensureCk() { if (!gCk) { checkpoint(); gCk = true } }
-    fun undo() { if (uStack.isEmpty()) return; rStack.addLast(doc.objs.map { it.copy() }); doc.objs = uStack.removeLast().toMutableList(); sel.clear(); selNode = -1; envQ = null; changed() }
-    fun redo() { if (rStack.isEmpty()) return; uStack.addLast(doc.objs.map { it.copy() }); doc.objs = rStack.removeLast().toMutableList(); sel.clear(); selNode = -1; envQ = null; changed() }
+    private fun restoreSnapshot(snapshot: CanvasSnapshot) {
+        doc = snapshot.document.deepCopy()
+        activeLayer = snapshot.activeLayer.coerceIn(0, doc.layers.lastIndex)
+        sel.clear(); selNode = -1; envQ = null; meshV = -1
+        changed()
+    }
+    fun undo() {
+        if (uStack.isEmpty()) return
+        rStack.addLast(snapshot())
+        restoreSnapshot(uStack.removeLast())
+    }
+    fun redo() {
+        if (rStack.isEmpty()) return
+        uStack.addLast(snapshot())
+        while (uStack.size > undoLimit) uStack.removeFirst()
+        restoreSnapshot(rStack.removeLast())
+    }
     fun newDoc(d: Doc) { finishPen(); pages = mutableListOf(d); pageIdx = 0; afterPageChange() }
     fun loadProject(list: List<Doc>, cur: Int) { finishPen(); pages = list.toMutableList(); pageIdx = cur.coerceIn(0, pages.lastIndex); afterPageChange() }
     fun projectJson() = Project.toJson(pages, pageIdx)
@@ -417,7 +435,7 @@ class VecCanvas(ctx: Context) : View(ctx) {
     }
 
     private fun cancelGesture() {
-        if (gCk && uStack.isNotEmpty()) { doc.objs = uStack.removeLast().toMutableList(); sel.clear() }
+        if (gCk && uStack.isNotEmpty()) { val previous = uStack.removeLast(); doc = previous.document.deepCopy(); activeLayer = previous.activeLayer.coerceIn(0, doc.layers.lastIndex); sel.clear() }
         mode = M_NONE; gCk = false; fh.clear(); invalidate()
     }
 
