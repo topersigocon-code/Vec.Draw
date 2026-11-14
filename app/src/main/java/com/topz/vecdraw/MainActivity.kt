@@ -957,7 +957,7 @@ class MainActivity : AppCompatActivity() {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(4), dp(6), dp(4)) }
         var filterText = ""
         val search = EditText(this).apply {
-            hint = "Search layers and objects"; singleLine = true; textSize = 12f
+            hint = "Search layers and objects"; setSingleLine(true); textSize = 12f
             setTextColor(Color.WHITE); setHintTextColor(0xFF9AA4B2.toInt())
             setPadding(dp(8), dp(5), dp(8), dp(5))
             addTextChangedListener(object : android.text.TextWatcher {
