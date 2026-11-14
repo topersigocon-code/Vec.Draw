@@ -35,6 +35,8 @@ class Layer(var name: String, var visible: Boolean = true, var locked: Boolean =
 
 /** All coordinates are in millimetres (document space). */
 class VObj(var kind: Kind = Kind.PATH) {
+    /** Optional user-facing name; absent in legacy VDT files. */
+    var name: String = ""
     var nodes = mutableListOf<Node>()
     var closed = false
     var holes = mutableListOf<SubPath>()   // extra contours (holes / compound parts), filled even-odd
@@ -157,7 +159,7 @@ class VObj(var kind: Kind = Kind.PATH) {
     }
 
     fun copy(): VObj = VObj(kind).also { o ->
-        o.nodes = nodes.map { it.copy() }.toMutableList(); o.closed = closed
+        o.name = name; o.nodes = nodes.map { it.copy() }.toMutableList(); o.closed = closed
         o.holes = holes.map { it.copy() }.toMutableList(); o.group = group; o.uid = uid; o.clipUid = clipUid
         o.fill = fill; o.fill2 = fill2; o.gradAngle = gradAngle; o.stroke = stroke; o.strokeW = strokeW
         o.cap = cap; o.join = join; o.dash = dash; o.arrow = arrow; o.alpha = alpha; o.shadow = shadow
@@ -171,7 +173,7 @@ class VObj(var kind: Kind = Kind.PATH) {
     }
 
     fun toJson(): JSONObject = JSONObject().apply {
-        put("k", kind.name); put("c", closed)
+        put("k", kind.name); put("c", closed); if (name.isNotBlank()) put("nm", name)
         fill?.let { put("f", it) }; fill2?.let { put("f2", it) }; stroke?.let { put("s", it) }
         put("ga", gradAngle.toDouble()); put("sw", strokeW.toDouble()); put("cap", cap); put("jn", join); put("ds", dash)
         put("ar", arrow); put("a", alpha.toDouble()); put("sh", shadow); put("ly", layer); put("vis", visible); put("lk", locked)
@@ -208,6 +210,7 @@ class VObj(var kind: Kind = Kind.PATH) {
     companion object {
         fun fromJson(j: JSONObject): VObj {
             val o = VObj(Kind.valueOf(j.getString("k")))
+            o.name = j.optString("nm", "")
             o.closed = j.optBoolean("c"); o.fill = if (j.has("f")) j.getInt("f") else null
             o.fill2 = if (j.has("f2")) j.getInt("f2") else null; o.stroke = if (j.has("s")) j.getInt("s") else null
             o.gradAngle = j.optDouble("ga", 0.0).toFloat(); o.strokeW = j.optDouble("sw", 0.3).toFloat()

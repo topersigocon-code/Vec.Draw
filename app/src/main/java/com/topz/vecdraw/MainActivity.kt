@@ -955,12 +955,25 @@ class MainActivity : AppCompatActivity() {
     // ---------- Object manager (layers + objects) ----------
     private fun objectManager(): View {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(4), dp(6), dp(4)) }
+        var filterText = ""
+        val search = EditText(this).apply {
+            hint = "Search layers and objects"; singleLine = true; textSize = 12f
+            setTextColor(Color.WHITE); setHintTextColor(0xFF9AA4B2.toInt())
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { filterText = s?.toString()?.trim().orEmpty(); refreshers.forEach { it() } }
+                override fun afterTextChanged(s: android.text.Editable?) {}
+            })
+        }
+        val listCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(search); col.addView(listCol)
         refreshers.add {
-            col.removeAllViews()
+            listCol.removeAllViews()
             val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             listOf("＋Layer" to { cv.checkpoint(); cv.doc.layers.add(Layer("Layer ${cv.doc.layers.size + 1}")); cv.activeLayer = cv.doc.layers.lastIndex; cv.changed() },
                 "▲" to { cv.order(true, true) }, "▼" to { cv.order(false, true) }, "⧉" to { cv.duplicate() }, "🗑" to { cv.deleteSel() }).forEach { (t, a) -> bar.addView(chip(t, a)) }
-            col.addView(hscroll(bar))
+            listCol.addView(hscroll(bar))
             for (li in cv.doc.layers.indices.reversed()) {
                 val l = cv.doc.layers[li]; val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                 r.addView(chip(if (l.visible) "👁" else "—") { cv.checkpoint(); l.visible = !l.visible; cv.changed() })
@@ -972,22 +985,60 @@ class MainActivity : AppCompatActivity() {
                 r.addView(chip("↑") { moveLayer(li, 1) })
                 r.addView(chip("↓") { moveLayer(li, -1) })
                 r.addView(chip("×") { deleteLayer(li) })
-                col.addView(r)
+                listCol.addView(r)
                 for (i in cv.doc.objs.indices.reversed()) {
                     val o = cv.doc.objs[i]; if (o.layer != li) continue
+                    val label = o.name.ifBlank { "${o.kind.name.lowercase()} #${i + 1}" }
+                    val searchable = (label + " " + o.text + " " + o.kind.name + " " + l.name).lowercase()
+                    if (filterText.isNotBlank() && !searchable.contains(filterText.lowercase())) continue
                     val or = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(18), 0, 0, 0) }
                     or.addView(chip(if (o.visible) "👁" else "—") { cv.checkpoint(); o.visible = !o.visible; cv.changed() })
                     or.addView(chip(if (o.locked) "🔒" else "🔓") { cv.checkpoint(); o.locked = !o.locked; cv.changed() })
                     or.addView(TextView(this).apply {
-                        text = "${o.kind.name.lowercase()} #${i + 1}${if (o.group != 0) " ▣${o.group}" else ""}${if (o.holes.isNotEmpty()) " ◌" else ""}${if (o.kind == Kind.TEXT) " “" + o.text.take(10) + "”" else ""}"
-                        setTextColor(if (o in cv.sel) GOLD else Color.WHITE); textSize = 12f; setPadding(dp(6), dp(5), dp(6), dp(5))
-                        setOnClickListener { if (!l.locked) cv.selectOne(o) }
+                        text = label + if (o.group != 0) " ▣${o.group}" else ""
+                        setTextColor(if (o in cv.sel) GOLD else Color.WHITE); textSize = 12f; setSingleLine(); ellipsize = android.text.TextUtils.TruncateAt.END
+                        setPadding(dp(6), dp(5), dp(6), dp(5)); layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                        setOnClickListener { if (!l.locked && !o.locked) cv.selectOne(o) }
                     })
-                    col.addView(or)
+                    or.addView(chip("✎") { renameObject(o) })
+                    or.addView(chip("＋") { duplicateObject(o) })
+                    or.addView(chip("↑") { moveObject(i, -1) })
+                    or.addView(chip("↓") { moveObject(i, 1) })
+                    listCol.addView(or)
                 }
             }
         }
         return ScrollView(this).apply { addView(col) }
+    }
+
+    private fun renameObject(obj: VObj) {
+        if (obj !in cv.doc.objs) return
+        val field = EditText(this).apply { setText(obj.name); hint = "Object name"; setSingleLine(true); setSelection(text.length) }
+        AlertDialog.Builder(this, R.style.AppDialog).setTitle("Rename object").setView(field)
+            .setNegativeButton("Cancel", null).setPositiveButton("Save") { _, _ ->
+                val name = field.text.toString().trim()
+                cv.checkpoint(); obj.name = name; cv.changed()
+            }.show()
+    }
+
+    private fun duplicateObject(obj: VObj) {
+        val copy = obj.copy()
+        cv.checkpoint()
+        copy.name = (obj.name.ifBlank { obj.kind.name.lowercase() }) + " copy"
+        copy.group = 0; copy.uid = 0; copy.clipUid = 0
+        copy.transform(android.graphics.Matrix().apply { setTranslate(5f, 5f) })
+        cv.doc.objs.add(cv.doc.objs.indexOf(obj).coerceAtLeast(0) + 1, copy)
+        cv.selectOne(copy); cv.changed()
+    }
+
+    /** Reorders one object in the document stacking order without changing its layer. */
+    private fun moveObject(index: Int, direction: Int) {
+        if (index !in cv.doc.objs.indices) return
+        val layer = cv.doc.objs[index].layer
+        val target = if (direction < 0) (index - 1 downTo 0).firstOrNull { cv.doc.objs[it].layer == layer }
+                     else (index + 1 until cv.doc.objs.size).firstOrNull { cv.doc.objs[it].layer == layer }
+        if (target == null) return
+        cv.checkpoint(); java.util.Collections.swap(cv.doc.objs, index, target); cv.changed()
     }
 
     // Layer operations keep the legacy integer layer references stable in existing .vdt files.

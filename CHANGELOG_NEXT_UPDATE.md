@@ -1,17 +1,19 @@
-# Vec.Draw development update — Core Editing Reliability
+# Vec.Draw 0.2.0 — Development Update 3
 
-## Implemented in this source update
+## Object Manager improvements
 
-- Undo/redo now stores a deep snapshot of the active page document rather than only its object list.
-- Active-page snapshots include page dimensions, unit, grid spacing, layer names/visibility/locking/opacity, object data, and horizontal/vertical guides.
-- The active layer index is restored with the snapshot.
-- Layer add, rename, duplicate, reorder, delete, visibility, locking, and opacity changes now create undo checkpoints.
-- Object visibility and locking changes now create undo checkpoints.
-- Page unit, page dimensions, and grid spacing changes now create undo checkpoints.
-- The native `.vdt` serialization schema is unchanged.
+- Added optional persistent object names to the native VDT object record (`nm`). Old files without this field still load with an empty name and keep the existing generated label.
+- Added object rename, duplicate, and same-layer stacking reorder controls.
+- Added a search field for object names, text contents, object types, and layer names.
+- Preserved the existing flat group representation; nested groups are not claimed as implemented.
 
-## Known limitations
+## Android signing configuration
 
-- Undo history remains scoped to the currently active page. Adding, duplicating, deleting, or reordering pages is not yet part of project-level undo/redo.
-- Bitmap payloads are shared by `VObj.copy()` snapshots; current bitmap editing is not implemented as in-place pixel mutation. If destructive bitmap editing is added, snapshot bitmap ownership must be revisited.
-- Android compilation and device-level testing have not been performed in this environment. Run the repository's Gradle CI build and the manual QA checklist before distributing an APK.
+- Added environment-based release signing configuration. No key or password is stored in the repository.
+- Bumped app version to `0.2.0` / versionCode `2`.
+- The original permanent signing key was not present in any supplied archive. See `SIGNING_KEY_RECOVERY.md`.
+
+## Verification
+
+- Source-level compatibility checks and ZIP integrity checks performed.
+- Android Gradle compilation and device UI testing remain pending in this environment.

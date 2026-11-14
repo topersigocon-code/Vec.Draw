@@ -44,3 +44,20 @@ Run these checks on a debug APK built from the same commit. Record device model,
 - [ ] Repeatedly undo/redo long edit sequences.
 - [ ] Rotate the device and switch between Classic and Full Canvas layouts.
 - [ ] Confirm no crash, ANR, or unrecoverable project corruption during the above workflows.
+
+## Update 3 — Object Manager
+
+- [ ] Open a legacy VDT document; confirm unnamed objects display generated labels.
+- [ ] Rename an object, save, close, reopen; confirm its name persists.
+- [ ] Duplicate PATH, TEXT, and IMAGE objects; confirm geometry and appearance remain intact and copies are offset.
+- [ ] Reorder objects within a layer; confirm stacking changes and other layers remain intact.
+- [ ] Search by object name, text contents, type, and layer name; clear search and confirm all entries return.
+- [ ] Undo/redo rename, duplicate, and reorder operations.
+- [ ] Build and install on Android API 29 and a current Android release.
+
+## Release signing
+
+- [ ] Confirm the keystore file is the original by comparing its certificate SHA-256 fingerprint with a previously released APK.
+- [ ] Confirm alias and passwords using secure CI secrets, not committed files.
+- [ ] Build release and verify APK certificate with apksigner.
+- [ ] Test upgrade over the existing installed app before distribution.

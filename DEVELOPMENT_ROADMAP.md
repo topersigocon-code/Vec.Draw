@@ -64,3 +64,12 @@ This roadmap prioritizes a reliable Android vector editor while preserving the e
 ## Definition of done
 
 A feature is complete only when it has: (1) a documented user workflow, (2) input validation and failure handling, (3) undo/redo behavior defined, (4) save/reopen coverage, (5) accessibility/touch behavior checked, and (6) a regression test or documented manual test on a real Android build.
+
+## Milestone 1 — Object Manager progress (Update 3)
+
+- [x] Add backward-compatible optional object names in VDT records.
+- [x] Add object rename, duplicate, and same-layer stacking reorder actions.
+- [x] Add object/layer content search in the Object Manager.
+- [ ] Add true nested group model and tree rendering (current group IDs remain flat).
+- [ ] Add isolate mode and multi-selection controls.
+- [ ] Add project-level page history and automated tests.
