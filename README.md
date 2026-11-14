@@ -28,3 +28,16 @@ Layouts: Classic panels (default) or Full canvas (Settings -> Layout, or menu ->
 See [DEVELOPMENT_ROADMAP.md](DEVELOPMENT_ROADMAP.md) for the staged plan and [QA_CHECKLIST.md](QA_CHECKLIST.md) for regression testing. The Object Manager now includes layer rename, duplicate, reorder, and delete actions; deleting a layer moves its objects to a surviving layer. These operations retain the existing `.vdt` layer-index representation. Undo/redo snapshots now cover the active page's object data, layers, guides, dimensions, unit, grid spacing, and active layer; page-list operations remain outside undo history for now.
 
 Build validation is still required on an Android SDK-equipped environment. Do not treat source inspection alone as proof that a release APK works on-device.
+
+
+## Update 4 — Typography foundation
+
+- Added underline and strikethrough controls to the text editor.
+- Decorations render on the Android canvas and are exported as SVG `text-decoration` attributes.
+- New properties are stored in `.vdt` documents; older files default to no decoration.
+- Existing bold, italic, font family, alignment, letter spacing, and leading controls remain available.
+
+This is the first typography increment; character-range formatting, per-letter kerning, paragraph styles, columns, and linked frames remain planned work.
+
+### Importing custom fonts
+Use **Edit → Import font (.ttf / .otf)…** to add one font, or **Edit → Import font collection (.zip)…** to import all valid TTF/OTF files in a ZIP archive. The Android document picker can browse supported external SD-card locations. Imported fonts are copied into Vec.Draw's private app storage and remain available offline; they are not installed system-wide. ZIP import ignores non-font files and applies size/entry limits for safety.

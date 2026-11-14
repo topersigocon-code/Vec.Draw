@@ -31,7 +31,8 @@ This roadmap prioritizes a reliable Android vector editor while preserving the e
 
 ## Milestone 2 — Typography
 
-- [ ] Character-level formatting and kerning controls.
+- [ ] Character-level formatting and per-glyph kerning controls.
+- [x] Add persistent underline and strikethrough character decorations (object-level formatting).
 - [ ] Paragraph styles, indentation, lists, and columns.
 - [ ] Linked text frames and text wrap around objects.
 - [ ] OpenType feature support where the Android text stack permits it.

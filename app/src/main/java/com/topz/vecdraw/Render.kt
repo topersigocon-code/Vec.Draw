@@ -318,6 +318,7 @@ object Export {
             Kind.TEXT -> {
                 val common = "font-family=\"${esc(Fonts.cssFamily(o.font))}\" font-size=\"${f(o.size)}\" fill=\"${hex(o.fill ?: 0)}\"" +
                     (if (o.bold) " font-weight=\"bold\"" else "") + (if (o.italic) " font-style=\"italic\"" else "") +
+                    (if (o.underline || o.strikeThrough) " text-decoration=\"" + listOfNotNull(if (o.underline) "underline" else null, if (o.strikeThrough) "line-through" else null).joinToString(" ") + "\"" else "") +
                     (if (o.spacing != 0f) " letter-spacing=\"${f(o.spacing * o.size)}\"" else "") + (if (op < 0.999f) " opacity=\"${f(op)}\"" else "")
                 val rot = if (o.tRot != 0f && !o.onPath) " transform=\"rotate(${f(o.tRot)} ${f(o.tx)} ${f(o.ty)})\"" else ""
                 if (o.onPath) {

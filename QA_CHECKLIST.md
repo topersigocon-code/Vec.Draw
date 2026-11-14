@@ -61,3 +61,12 @@ Run these checks on a debug APK built from the same commit. Record device model,
 - [ ] Confirm alias and passwords using secure CI secrets, not committed files.
 - [ ] Build release and verify APK certificate with apksigner.
 - [ ] Test upgrade over the existing installed app before distribution.
+
+## Font import (Update 4.1)
+- [ ] Import one `.ttf` from internal storage and select it in the text editor.
+- [ ] Import one `.ttf` from an external SD card using the system document picker.
+- [ ] Import a `.zip` containing multiple `.ttf` / `.otf` files; verify all valid fonts appear in the text font list.
+- [ ] Import a ZIP containing folders and unrelated files; verify unsupported entries are skipped without crashing.
+- [ ] Import a corrupt ZIP and a ZIP with invalid font data; verify a clear failure/empty result and no app crash.
+- [ ] Import a font whose filename already exists; verify the existing font is not overwritten.
+- [ ] Force-close and reopen the app; verify imported fonts remain available.

@@ -17,3 +17,10 @@
 
 - Source-level compatibility checks and ZIP integrity checks performed.
 - Android Gradle compilation and device UI testing remain pending in this environment.
+
+## Update 4.1 — External font collection import
+- Added ZIP font collection import through Android's Storage Access Framework, including external SD-card providers.
+- ZIP import scans archive entries and installs valid `.ttf` / `.otf` files into app-private font storage; it does not extract arbitrary archive paths.
+- Added per-font, total archive, and entry-count limits; invalid and unsupported entries are skipped.
+- Prevented imported font filenames from overwriting existing fonts by generating unique names.
+- Existing single-font `.ttf` / `.otf` import remains available.

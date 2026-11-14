@@ -244,6 +244,7 @@ class MainActivity : AppCompatActivity() {
     private var maskArgs = floatArrayOf(1f, 0f, 10f)
     private val openSvg = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) loadSvg(uri) }
     private val openFont = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) loadFont(uri) }
+    private val openFontZip = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) loadFontZip(uri) }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
     private fun write(name: String, mime: String, w: (OutputStream) -> Unit) { pendingWrite = w; createDoc.launch(name to mime) }
@@ -1174,7 +1175,9 @@ class MainActivity : AppCompatActivity() {
     private fun editMenu() = menu("Edit", listOf(
         "Undo" to { cv.undo() }, "Redo" to { cv.redo() }, "Copy" to { cv.copySel() }, "Cut" to { cv.cutSel() }, "Paste" to { cv.paste(false) }, "Paste in place" to { cv.paste(true) }, "Styles…" to { stylesMenu() }, "Symbols…" to { symbolsMenu() },
         "Convert text to curves" to { if (!cv.textToCurves()) toast("Select a text first (text on a path can't be converted)") },
-        "Import font (.ttf / .otf)…" to { openFont.launch(arrayOf("*/*")) }, "Select all" to { cv.selectAll() }, "Duplicate" to { cv.duplicate() }, "Delete" to { cv.deleteSel() },
+        "Import font (.ttf / .otf)…" to { openFont.launch(arrayOf("*/*")) },
+        "Import font collection (.zip)…" to { openFontZip.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream", "*/*")) },
+        "Select all" to { cv.selectAll() }, "Duplicate" to { cv.duplicate() }, "Delete" to { cv.deleteSel() },
         "Edit text…" to { cv.sel.firstOrNull { it.kind == Kind.TEXT }?.let { textDialog(it, false) } },
         "Fit text to selected path" to { cv.attachTextToPath() }, "Detach text from path" to { cv.detachText() }))
 
@@ -1216,7 +1219,8 @@ class MainActivity : AppCompatActivity() {
         val kern = field(200).also { it.setText(fmt(o.spacing)); col.addView(label("Kerning / letter-spacing (em)")); col.addView(it) }
         val lead = field(200).also { it.setText(fmt(o.leading)); col.addView(label("Leading (× size)")); col.addView(it) }
         val bold = CheckBox(this).apply { text = "Bold"; isChecked = o.bold }; val ital = CheckBox(this).apply { text = "Italic"; isChecked = o.italic }
-        col.addView(bold); col.addView(ital)
+        val under = CheckBox(this).apply { text = "Underline"; isChecked = o.underline }; val strike = CheckBox(this).apply { text = "Strikethrough"; isChecked = o.strikeThrough }
+        col.addView(bold); col.addView(ital); col.addView(under); col.addView(strike)
         val al = Spinner(this).apply { adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, listOf("Align left", "Align centre", "Align right")); setSelection(o.align) }; col.addView(al)
         val fontNames = Fonts.all()
         val fontSp = Spinner(this).apply { adapter = ArrayAdapter(context, android.R.layout.simple_spinner_dropdown_item, fontNames); setSelection(max(0, fontNames.indexOf(o.font.ifEmpty { "sans" }))) }
@@ -1226,7 +1230,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("OK") { _, _ ->
                 if (!isNew) cv.checkpoint()
                 o.text = et.text.toString(); o.size = f(sz.text, 12f).coerceAtLeast(1f) * 25.4f / 72f; o.spacing = f(kern.text, 0f); o.leading = f(lead.text, 1.2f)
-                o.bold = bold.isChecked; o.italic = ital.isChecked; o.align = al.selectedItemPosition
+                o.bold = bold.isChecked; o.italic = ital.isChecked; o.underline = under.isChecked; o.strikeThrough = strike.isChecked; o.align = al.selectedItemPosition
                 o.font = fontNames[fontSp.selectedItemPosition.coerceIn(0, fontNames.lastIndex)]; o.tRot = f(rotF.text, 0f)
                 cv.commitText(o, isNew)
             }.setNegativeButton("Cancel", null).show()
@@ -1732,6 +1736,15 @@ class MainActivity : AppCompatActivity() {
         try { contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) name = c.getString(0) } } catch (e: Exception) { }
         val n = Fonts.import(contentResolver, uri, name)
         toast(if (n != null) "Font added: $n (choose it when editing text)" else "Could not load that font file")
+    }
+
+    private fun loadFontZip(uri: Uri) {
+        val (names, skipped) = Fonts.importZip(contentResolver, uri)
+        val message = when {
+            names.isNotEmpty() -> "Imported ${names.size} font(s)" + if (skipped > 0) "; skipped $skipped unsupported/invalid file(s)" else ""
+            else -> "No valid TTF/OTF fonts found in ZIP"
+        }
+        toast(message)
     }
 
     // ---------- Storage (SAF) ----------

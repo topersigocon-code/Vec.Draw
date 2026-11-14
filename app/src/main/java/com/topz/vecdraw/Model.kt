@@ -66,6 +66,7 @@ class VObj(var kind: Kind = Kind.PATH) {
     var locked = false
     // text
     var text = ""; var size = 8f; var bold = false; var italic = false
+    var underline = false; var strikeThrough = false
     var align = 0; var spacing = 0f; var leading = 1.2f
     var font = ""; var tRot = 0f        // font family (built-in or imported file) / rotation of text and images (deg)
     var gradType = 0; var fillMid: Int? = null   // 0 linear, 1 radial gradient; optional middle colour stop
@@ -94,6 +95,7 @@ class VObj(var kind: Kind = Kind.PATH) {
     fun textPaint() = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = size
         typeface = Fonts.typeface(font, bold, italic)
+        isUnderlineText = underline; isStrikeThruText = strikeThrough
         letterSpacing = spacing
         textAlign = when (align) { 1 -> Paint.Align.CENTER; 2 -> Paint.Align.RIGHT; else -> Paint.Align.LEFT }
     }
@@ -164,7 +166,7 @@ class VObj(var kind: Kind = Kind.PATH) {
         o.fill = fill; o.fill2 = fill2; o.gradAngle = gradAngle; o.stroke = stroke; o.strokeW = strokeW
         o.cap = cap; o.join = join; o.dash = dash; o.arrow = arrow; o.alpha = alpha; o.shadow = shadow
         o.layer = layer; o.visible = visible; o.locked = locked
-        o.text = text; o.size = size; o.bold = bold; o.italic = italic; o.align = align; o.spacing = spacing
+        o.text = text; o.size = size; o.bold = bold; o.italic = italic; o.underline = underline; o.strikeThrough = strikeThrough; o.align = align; o.spacing = spacing
         o.leading = leading; o.tx = tx; o.ty = ty; o.frameW = frameW; o.onPath = onPath
         o.bmp = bmp; o.rect = RectF(rect)
         o.font = font; o.tRot = tRot; o.gradType = gradType; o.fillMid = fillMid
@@ -197,7 +199,7 @@ class VObj(var kind: Kind = Kind.PATH) {
         meshPos?.let { p -> put("mpos", JSONArray(p.map { it.toDouble() })) }
         meshH?.let { p -> put("mh", JSONArray(p.map { it.toDouble() })) }
         if (kind == Kind.TEXT) {
-            put("t", text); put("sz", size.toDouble()); put("b", bold); put("i", italic); put("al", align)
+            put("t", text); put("sz", size.toDouble()); put("b", bold); put("i", italic); put("un", underline); put("st", strikeThrough); put("al", align)
             put("sp", spacing.toDouble()); put("ld", leading.toDouble()); put("tx", tx.toDouble()); put("ty", ty.toDouble())
             put("fw", frameW.toDouble()); put("op", onPath)
         }
@@ -243,6 +245,7 @@ class VObj(var kind: Kind = Kind.PATH) {
             if (j.has("mesh")) { val a = j.getJSONArray("mesh"); o.mesh = IntArray(a.length()) { a.getInt(it) }; o.meshR = j.optInt("mr"); o.meshC = j.optInt("mc"); j.optJSONArray("mpos")?.let { pa -> o.meshPos = FloatArray(pa.length()) { pa.getDouble(it).toFloat() } }; j.optJSONArray("mh")?.let { ha -> o.meshH = FloatArray(ha.length()) { ha.getDouble(it).toFloat() } } }
             if (o.kind == Kind.TEXT) {
                 o.text = j.optString("t"); o.size = j.optDouble("sz", 8.0).toFloat(); o.bold = j.optBoolean("b"); o.italic = j.optBoolean("i")
+                o.underline = j.optBoolean("un", false); o.strikeThrough = j.optBoolean("st", false)
                 o.align = j.optInt("al"); o.spacing = j.optDouble("sp", 0.0).toFloat(); o.leading = j.optDouble("ld", 1.2).toFloat()
                 o.tx = j.optDouble("tx").toFloat(); o.ty = j.optDouble("ty").toFloat(); o.frameW = j.optDouble("fw", 0.0).toFloat()
                 o.onPath = j.optBoolean("op")
